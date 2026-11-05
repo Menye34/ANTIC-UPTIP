@@ -233,3 +233,114 @@ describe('Figma Login scenarios', () => {
     expect(window.location.href).toBe(href)
   })
 })
+
+describe('Approved Login message dismissal', () => {
+  it.each([
+    ['invalid_credentials', 'Username'], ['invalid_credentials', 'Password'],
+    ['account_unavailable', 'Username'], ['account_unavailable', 'Password'],
+    ['session_expired', 'Username'], ['session_expired', 'Password'],
+  ])('clears %s immediately when %s changes', async (state, field) => {
+    if (state === 'session_expired') {
+      sessionState = 'session_expired'
+      render(<Login />)
+      await screen.findByText('Your session has ended. Sign in again to continue.')
+      sessionState = 'unauthenticated' // Real endpoint removes the expired cookie.
+    } else {
+      post.mockResolvedValue(reply(state, state === 'account_unavailable' ? 403 : 401))
+      render(<Login />)
+      const user = await fill()
+      await user.click(screen.getByRole('button', { name: 'Sign In' }))
+      await screen.findByRole(state === 'invalid_credentials' ? 'alert' : 'status')
+    }
+    const usernameBefore = (screen.getByLabelText('Username') as HTMLInputElement).value
+    const input = screen.getByLabelText(field)
+    fireEvent.change(input, { target: { value: field === 'Username' ? 'corrected-user' : 'new-password' } })
+    expect(document.getElementById('login-notice')).toBeNull()
+    expect(post).toHaveBeenCalledTimes(state === 'session_expired' ? 0 : 1)
+    if (state === 'account_unavailable' && field === 'Password') {
+      expect(screen.getByLabelText('Username')).toHaveValue(usernameBefore)
+      expect(screen.getByRole('button', { name: 'Sign In' })).toBeEnabled()
+    }
+  })
+
+  it('displays Invalid Credentials again if a corrected attempt also fails', async () => {
+    render(<Login />)
+    const user = await fill()
+    await user.click(screen.getByRole('button', { name: 'Sign In' }))
+    await screen.findByRole('alert')
+    await user.type(screen.getByLabelText('Password'), 'correction')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sign In' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to sign in. Check your credentials and try again.')
+    expect(post).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['invalid_credentials', 'account_unavailable', 'session_expired', 'authenticated'])(
+    'keeps %s visible while idle, without timer dismissal', async (state) => {
+      vi.useFakeTimers()
+      try {
+        if (state === 'session_expired') sessionState = 'session_expired'
+        post.mockResolvedValue(reply(state, state === 'invalid_credentials' ? 401 : state === 'account_unavailable' ? 403 : 200))
+        render(<Login />)
+        await act(async () => {})
+        if (state !== 'session_expired') {
+          fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'analyst-01' } })
+          fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'test-password' } })
+          await act(async () => { fireEvent.submit(screen.getByRole('button', { name: 'Sign In' }).closest('form')!) })
+        }
+        const notice = document.getElementById('login-notice')!
+        expect(notice).not.toBeNull()
+        const message = notice.textContent
+        sessionState = state === 'authenticated' ? 'authenticated' : 'unauthenticated'
+        sessionStatus = state === 'authenticated' ? 200 : 401
+        await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1000) })
+        expect(document.getElementById('login-notice')).toHaveTextContent(message!)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+  it('keeps Authentication Complete when either credential is edited', async () => {
+    post.mockResolvedValue(reply('authenticated'))
+    render(<Login />)
+    const user = await fill()
+    await user.click(screen.getByRole('button', { name: 'Sign In' }))
+    await screen.findByText('Authentication complete.')
+    await user.type(screen.getByLabelText('Username'), '-edited')
+    await user.type(screen.getByLabelText('Password'), 'another-password')
+    expect(screen.getByRole('status')).toHaveTextContent('Authentication complete.')
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not clear Invalid Credentials on focus or password visibility changes', async () => {
+    render(<Login />)
+    const user = await fill()
+    await user.click(screen.getByRole('button', { name: 'Sign In' }))
+    await screen.findByRole('alert')
+    await user.click(screen.getByLabelText('Username'))
+    await user.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Unable to sign in. Check your credentials and try again.')
+    expect(screen.getByLabelText('Password')).toHaveValue('test-password')
+    expect(screen.getByLabelText('Password')).toHaveAttribute('type', 'text')
+  })
+
+  it('does not restore a dismissed expiry notice from an older session check', async () => {
+    let finish!: (value: unknown) => void
+    let reads = 0
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url === '/api/v1/auth/session') {
+        reads += 1
+        return reads === 1 ? Promise.resolve(reply('session_expired', 401)) : new Promise((resolve) => { finish = resolve })
+      }
+      return Promise.resolve(reply('authenticated'))
+    }))
+    render(<Login />)
+    await screen.findByText('Your session has ended. Sign in again to continue.')
+    fireEvent.focus(window)
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'corrected-user' } })
+    expect(document.getElementById('login-notice')).toBeNull()
+    await act(async () => { finish(reply('session_expired', 401)) })
+    expect(document.getElementById('login-notice')).toBeNull()
+    expect(screen.getByLabelText('Username')).toHaveValue('corrected-user')
+  })
+})

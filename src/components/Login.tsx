@@ -8,7 +8,7 @@ import errorIcon from '../assets/login-error.svg'
 import infoIcon from '../assets/login-info.svg'
 import './Login.css'
 
-type Notice = { message: string; tone: 'error' | 'info' }
+type Notice = { message: string; tone: 'error' | 'info'; dismissOnEdit?: boolean }
 const SESSION_ENDED = 'Your session has ended. Sign in again to continue.'
 
 /** Authentication Login scenarios: actual Figma frames, without review wrappers. */
@@ -42,7 +42,7 @@ export default function Login() {
           setPassword('')
           setPasswordVisible(false)
           setCapsLock(false)
-          setNotice({ message: SESSION_ENDED, tone: 'info' })
+          setNotice({ message: SESSION_ENDED, tone: 'info', dismissOnEdit: true })
         }
       } catch {
         // A network outage is not proof of session expiry. Check again later.
@@ -67,23 +67,32 @@ export default function Login() {
     setCapsLock(event.getModifierState('CapsLock'))
   }
 
+  function credentialsChanged() {
+    // A session check started for older input must not restore a dismissed notice.
+    generation.current += 1
+    setNotice((current) => current?.dismissOnEdit ? null : current)
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (inFlight.current || !ready) return
-    generation.current += 1
+    const version = ++generation.current
     inFlight.current = true
     setPending(true)
     setNotice(null)
     setPasswordVisible(false)
     try {
       const result = await signIn(username, password)
+      if (version !== generation.current) return
       const error = result.state === 'invalid_credentials'
-      setNotice({ message: outcomeMessage(result), tone: error ? 'error' : 'info' })
+      setNotice({ message: outcomeMessage(result), tone: error ? 'error' : 'info',
+        dismissOnEdit: error || result.state === 'account_unavailable' })
       // Figma retains both values for invalid credentials; unavailable clears only password.
       if (result.state !== 'invalid_credentials') setPassword('')
       if (result.state === 'authenticated') rememberSession()
       // No dashboard, MFA or password-replacement navigation is implemented here.
     } catch {
+      if (version !== generation.current) return
       setNotice({ message: 'Unable to reach the sign-in service. Please try again.', tone: 'info' })
     } finally {
       inFlight.current = false
@@ -115,7 +124,7 @@ export default function Login() {
             <input id="username" name="username" type="text" autoComplete="username" disabled={pending}
               autoCapitalize="none" spellCheck={false} placeholder="Enter your username" value={username} required maxLength={128}
               onKeyDown={detectCapsLock} onKeyUp={detectCapsLock}
-              onChange={(event) => setUsername(event.target.value)} />
+              onChange={(event) => { setUsername(event.target.value); credentialsChanged() }} />
           </div>
           <div className="login-field">
             <label htmlFor="password">Password</label>
@@ -124,7 +133,7 @@ export default function Login() {
                 autoComplete="current-password" placeholder="Enter your password" value={password} required maxLength={1024}
                 aria-describedby={capsLock && !pending ? 'login-caps-lock' : undefined}
                 onKeyDown={detectCapsLock} onKeyUp={detectCapsLock}
-                onChange={(event) => setPassword(event.target.value)} />
+                onChange={(event) => { setPassword(event.target.value); credentialsChanged() }} />
               <button className="login-password-toggle" type="button" disabled={pending}
                 aria-label={passwordVisible ? 'Hide password' : 'Show password'}
                 aria-pressed={passwordVisible} aria-controls="password"
