@@ -96,8 +96,8 @@ bodies over 8192 bytes are rejected before JSON parsing, including chunked bodie
 
 | State | HTTP | Implemented behavior |
 | --- | --- | --- |
-| `invalid_credentials` | 401 | Unknown, wrong password, disabled and locked accounts share the approved generic message. |
-| `account_unavailable` | — | Defined interface; detailed reason stored only in protected audit records, not publicly emitted. |
+| `invalid_credentials` | 401 | Unknown usernames and incorrect passwords (including disabled/locked accounts) share the approved generic message. |
+| `account_unavailable` | 403 | Disclosed for a disabled/locked account only after verifying its correct password; no session issued. |
 | `password_change_required` | 200 | Credentials verified; no session, no continuation token; UI explicitly says step unavailable. |
 | `mfa_enrollment_required` | 200 | Policy requires MFA and enrollment is absent; no session. |
 | `mfa_verification_required` | 200 | Enrolled or required MFA; no session, including when a historic verification timestamp exists. |
@@ -105,7 +105,8 @@ bodies over 8192 bytes are rejected before JSON parsing, including chunked bodie
 | `rate_limited` | 429 | Wait for the fixed-window expiry; Retry-After supplied conservatively. |
 | `invalid_request` | 413/422 | Generic response without submitted values. |
 | `forbidden` | 403 | Origin/CSRF check failed. |
-| `unauthenticated` | 401/200 | Missing/expired/invalid session; or successful logout. |
+| `unauthenticated` | 401/200 | Missing/invalid session; or successful logout. |
+| `session_expired` | 401 | Recognized expired session; expired browser cookie removed. |
 | `unavailable` | 503 | Database error, no internal details exposed. |
 
 Password replacement, MFA enrollment and per-login MFA verification remain
@@ -161,8 +162,9 @@ branding, fonts, dimensions and disabled style are retained. Controlled empty
 fields enable submission only when both contain values. The real API request uses
 same-origin credentials, a 15-second timeout and an immediate in-flight guard.
 The button displays `Signing in...`; repeated submits are blocked. Password input
-is cleared on completion. Errors and pending states use an accessible status
-message; the card expands only when a response message is present. No dashboard
+is retained for invalid credentials and network retry, and cleared for account
+unavailability or other completed responses. Errors and pending states use the Figma alert above the fields; the card expands
+only when a response message is present. No dashboard
 navigation occurs, even on completed authentication.
 
 To verify communication, inspect the browser Network tab for the login POST and
@@ -196,3 +198,76 @@ loading, duplicate prevention, errors/retry and no unauthorized navigation.
 They do not establish a pixel-perfect browser/Figma comparison. Browser visual
 verification remains outstanding in this workspace because Chromium cannot open
 the required process socket; no screenshot match is claimed.
+
+## Approved Login scenarios (Figma inspection)
+
+These are the actual 1440 × 900 implementation frames, not the 1440 × 936 review wrappers.
+All cards remain 480px wide, with 32px padding, 24px section gaps and existing Inter fonts.
+
+| Scenario | Node | Card height | Behavior |
+| --- | --- | --- | --- |
+| Login — Default | 44:2587 | 497px | Empty fields, disabled gray Sign In. |
+| Login — Filled/Ready | 205:323 | 497px | Both values present; blue #2563EB button with white text. |
+| Login — Signing In | 205:356 | 497px | Disabled slate fields/button; Signing in...; no duplicate submission. |
+| Login — Invalid Credentials | 205:387 | 597px | Red error alert above fields; both values retained, Sign In ready. |
+| Login — Account Unavailable | 205:427 | 597px | Blue info alert; username retained, password cleared, Sign In disabled. |
+| Session expired | 254:17720 | 575px | Blue info alert; both fields empty. |
+| Login — Caps Lock on | 254:17857 | 531px | Caps Lock is on, amber #92400E, 12/18px below password, no warning icon. |
+
+Focus uses a 2px blue boundary and 3px #BFDBFE ring. Alert icons are exact 20px SVG
+exports from Figma, with 16px padding, 12px icon/message gap, 6px radius, 14/22px
+body text. Red: #FEF2F2 / #FECACA / #991B1B. Info: #EFF6FF / #BFDBFE / #1D4ED8.
+Alert heights use inside borders so text width matches Figma.
+
+Password visibility is an accessible 32px toggle containing a 16px glyph. It
+changes the actual input type and preserves its value. Figma's Visible master
+203:1248 repeats the same eye-off asset as Hidden. To fulfill the explicit
+open-eye interaction requirement, the visible glyph uses the corresponding
+Lucide eye SVG with the same 16px slate (#475569) treatment and 1px rendered
+stroke. The original Figma eye-off remains unchanged. Lucide's license is in
+src/assets/lucide-LICENSE.txt. No Figma nodes were edited.
+
+### Session-expiry detection
+
+Login checks the real session endpoint on mount, every 30 seconds and on window
+focus/visibility restoration. A 401 is only treated as session expiry if the
+server recognizes an expired session or this tab previously observed a real
+successful login/session. A non-sensitive boolean in sessionStorage preserves
+that UI hint across reloads; it grants no authority and stores no secret. A first
+visit with no previous authenticated state remains Default. Network/server
+failures do not imply expiry. An expired-cookie response removes the stale cookie
+to prevent repeated notices from clearing credentials on later checks. Future
+intentional logout UI must call clearKnownSession after successful logout.
+
+### Manual Kali test checklist
+
+Pull feat/authentication-module and use the startup commands above. No new
+migration or configuration variable is required for the Login scenario changes.
+
+1. Open http://localhost:5173 at 1440 × 900. Confirm Default has empty fields and
+   a gray disabled button. Fill just one field: it remains disabled. Fill both:
+   the button immediately turns blue. Compare with 205:323.
+2. Click the password toggle, then activate it using keyboard Enter/Space.
+   Confirm visible text/open eye, hidden text/crossed eye and unchanged value.
+3. Submit a real request. With browser network throttling, confirm disabled fields,
+   Signing in... and exactly one login POST while pending (205:356).
+4. Enter an unknown username or incorrect password: the exact red Figma message
+   appears above fields; entered values remain and the button returns to blue.
+5. For a disposable development account, set status to disabled in the development
+   database and submit its **correct** password. Expect the blue Account
+   Unavailable message, retained username and cleared password. A wrong password
+   for the same disabled account must still show the generic invalid message.
+   Restore the account status afterward; never perform this on production users.
+6. Switch Caps Lock on while typing, then off. Confirm the amber text appears
+   below password and disappears, without altering the button's readiness.
+7. Complete login using a development account explicitly permitted to use
+   password-only authentication. For a quick expiry test set
+   UPTIP_SESSION_SECONDS=60, restart the backend, sign in, wait past 60 seconds,
+   then focus the window or wait for the next 30-second check. Expect Session
+   Expired with empty fields. An ordinary first visit must never show it.
+8. Stop the backend and submit: receive a retryable non-sensitive service error,
+   retain credentials and restore the button. Resume backend service and retry.
+
+MFA/password-change accounts still stop at their safe pending response; their UI
+and dashboard navigation remain out of scope. Local automated tests check the
+actual CSS color rules in jsdom and the DOM/API contracts, not a pixel screenshot.

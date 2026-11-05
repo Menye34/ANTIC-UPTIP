@@ -44,8 +44,10 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
 def current_session(request, db):
     token = request.cookies.get(get_settings().cookie_name)
     session = db.get(AuthSession, digest(token)) if token and len(token) <= 128 else None
-    if session is None or session.expires_at <= datetime.now(timezone.utc):
+    if session is None:
         return None, None
+    if session.expires_at <= datetime.now(timezone.utc):
+        return session, None
     user = db.get(User, session.user_id)
     # Gates are rechecked on every request, so changed policy invalidates old sessions.
     if user is None or not can_activate(user):
@@ -57,6 +59,11 @@ def current_session(request, db):
 def session_status(request: Request, db: Session = Depends(get_db)):
     session, user = current_session(request, db)
     if not user:
+        if session is not None and session.expires_at <= datetime.now(timezone.utc):
+            response = reply(401, 'session_expired', 'Your session has ended. Sign in again to continue.')
+            response.delete_cookie(get_settings().cookie_name, path='/', secure=get_settings().cookie_secure,
+                                   httponly=True, samesite='strict')
+            return response
         return reply(401, 'unauthenticated', 'Authentication required.')
     return AuthResponse(state='authenticated', message='Authentication complete.')
 

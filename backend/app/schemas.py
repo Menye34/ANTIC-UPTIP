@@ -3,7 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 State = Literal['invalid_credentials', 'account_unavailable', 'password_change_required',
                 'mfa_verification_required', 'mfa_enrollment_required', 'authenticated',
-                'rate_limited', 'unavailable', 'invalid_request', 'forbidden', 'unauthenticated']
+                'rate_limited', 'unavailable', 'invalid_request', 'forbidden', 'unauthenticated', 'session_expired']
 
 
 class LoginRequest(BaseModel):

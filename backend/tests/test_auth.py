@@ -27,14 +27,18 @@ def test_valid_session_cookie_and_protected_resource(client, user, db):
     assert 'password_hash' not in response.text and user.password_hash not in response.text
 
 
-def test_unknown_wrong_and_unavailable_have_same_public_error(client, user, db):
+@pytest.mark.parametrize('status', ['disabled', 'locked'])
+def test_unknown_and_wrong_password_do_not_disclose_account_state(client, user, db, status):
     wrong = login(client, password='wrong')
     unknown = login(client, username='unknown')
-    user.status = 'disabled'
+    user.status = status
     db.commit()
+    disabled_wrong = login(client, password='wrong')
     unavailable = login(client)
-    assert wrong.status_code == unknown.status_code == unavailable.status_code == 401
-    assert wrong.json() == unknown.json() == unavailable.json()
+    assert wrong.status_code == unknown.status_code == disabled_wrong.status_code == 401
+    assert wrong.json() == unknown.json() == disabled_wrong.json()
+    assert unavailable.status_code == 403
+    assert unavailable.json()['state'] == 'account_unavailable'
     assert not client.cookies
     assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
     assert 'account_unavailable' in db.scalars(select(AuthEvent.reason)).all()
@@ -74,7 +78,10 @@ def test_expiration_and_policy_changes_reject_sessions(client, user, db):
     session = db.scalar(select(AuthSession))
     session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     db.commit()
-    assert client.get('/api/v1/auth/session').status_code == 401
+    expired = client.get('/api/v1/auth/session')
+    assert expired.status_code == 401 and expired.json()['state'] == 'session_expired'
+    assert 'Max-Age=0' in expired.headers['set-cookie']
+    assert client.get('/api/v1/auth/session').json()['state'] == 'unauthenticated'
     login(client)
     user.password_change_required = True
     db.commit()

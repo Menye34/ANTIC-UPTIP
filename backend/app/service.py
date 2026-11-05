@@ -38,11 +38,15 @@ def authenticate(db, settings, username, password, ip, old_token=None):
         return 429, {'state': 'rate_limited', 'message': 'Too many sign-in attempts. Please try again later.'}, None
     user = db.scalar(select(User).where(User.username == username).with_for_update())
     valid = verify_password(password, user.password_hash if user else DUMMY_HASH)
-    if not valid or user is None or user.status != 'active':
-        audit(db, 'account_unavailable' if valid and user else 'invalid_credentials', ip_key, user)
+    if not valid or user is None:
+        audit(db, 'invalid_credentials', ip_key, user)
         db.commit()
-        # Disabled and unknown accounts deliberately have identical public errors.
         return 401, {'state': 'invalid_credentials', 'message': INVALID}, None
+    if user.status != 'active':
+        # Account-specific information is disclosed only after proof of the correct password.
+        audit(db, 'account_unavailable', ip_key, user)
+        db.commit()
+        return 403, {'state': 'account_unavailable', 'message': 'Your account is currently unavailable. Contact your administrator.'}, None
     if hasher.check_needs_rehash(user.password_hash):
         user.password_hash = hasher.hash(password)
     if user.password_change_required:

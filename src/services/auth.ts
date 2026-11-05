@@ -1,6 +1,6 @@
 export type AuthState = 'invalid_credentials' | 'account_unavailable' | 'password_change_required'
   | 'mfa_verification_required' | 'mfa_enrollment_required' | 'authenticated'
-  | 'rate_limited' | 'unavailable' | 'invalid_request' | 'forbidden' | 'unauthenticated'
+  | 'rate_limited' | 'unavailable' | 'invalid_request' | 'forbidden' | 'unauthenticated' | 'session_expired'
 
 export interface AuthResult {
   state: AuthState
@@ -23,7 +23,7 @@ export async function signIn(username: string, password: string): Promise<AuthRe
   const result: AuthResult = await response.json()
   const states: AuthState[] = ['invalid_credentials', 'account_unavailable', 'password_change_required',
     'mfa_verification_required', 'mfa_enrollment_required', 'authenticated', 'rate_limited',
-    'unavailable', 'invalid_request', 'forbidden', 'unauthenticated']
+    'unavailable', 'invalid_request', 'forbidden', 'unauthenticated', 'session_expired']
   if (!states.includes(result.state) || (!response.ok && result.state === 'authenticated')) {
     throw new Error('Invalid authentication response')
   }
@@ -42,4 +42,30 @@ export function outcomeMessage(result: AuthResult): string {
     case 'rate_limited': return 'Too many sign-in attempts. Please try again later.'
     default: return 'Sign-in is temporarily unavailable. Please try again.'
   }
+}
+
+// This boolean is a UI hint only, never an authentication credential or authorization gate.
+const SESSION_HINT = 'uptip.previously-authenticated'
+let knownSession = false
+export function rememberSession() {
+  knownSession = true
+  try { sessionStorage.setItem(SESSION_HINT, 'true') } catch { /* Storage may be unavailable. */ }
+}
+export function hasKnownSession() {
+  try { return knownSession || sessionStorage.getItem(SESSION_HINT) === 'true' } catch { return knownSession }
+}
+export function clearKnownSession() {
+  knownSession = false
+  csrfToken = null
+  try { sessionStorage.removeItem(SESSION_HINT) } catch { /* No stored secrets to clear. */ }
+}
+export async function inspectSession(signal: AbortSignal): Promise<AuthResult> {
+  const response = await fetch('/api/v1/auth/session', {
+    credentials: 'same-origin',
+    signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
+  })
+  const result: AuthResult = await response.json()
+  if ((response.ok && result.state === 'authenticated') ||
+      (response.status === 401 && ['unauthenticated', 'session_expired'].includes(result.state))) return result
+  throw new Error('Session inspection unavailable')
 }
