@@ -1,10 +1,10 @@
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 State = Literal['invalid_credentials', 'account_unavailable', 'password_change_required',
-                'mfa_verification_required', 'mfa_enrollment_required', 'authenticated',
-                'rate_limited', 'unavailable', 'invalid_request', 'forbidden', 'unauthenticated', 'session_expired', 'invalid_code', 'code_expired', 'too_many_attempts',
-                'challenge_expired', 'mfa_cancelled', 'password_mismatch', 'password_rejected', 'password_changed']
+                'authenticated',
+                'rate_limited', 'unavailable', 'invalid_request', 'forbidden', 'unauthenticated', 'session_expired',
+                'challenge_expired', 'password_mismatch', 'password_rejected', 'password_changed']
 
 
 class LoginRequest(BaseModel):
@@ -19,22 +19,6 @@ class AuthResponse(BaseModel):
     next_step_available: bool = False
     csrf_token: str | None = None
     retry_after_seconds: int | None = None
-
-
-class MfaVerifyRequest(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    code: SecretStr = Field(min_length=6, max_length=6)
-
-    @classmethod
-    def valid_code(cls, value):
-        return len(value) == 6 and value.isascii() and value.isdigit()
-
-    @field_validator('code')
-    @classmethod
-    def six_digits(cls, value):
-        if not cls.valid_code(value.get_secret_value()):
-            raise ValueError('Six digits required')
-        return value
 
 
 class PasswordChangeRequest(BaseModel):

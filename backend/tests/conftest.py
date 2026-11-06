@@ -64,7 +64,7 @@ def user(db):
     db.add(Role(name='test-fixture-role'))
     db.flush()
     user = User(username='analyst-01', role='test-fixture-role', password_hash=hasher.hash('test-password'),
-                password_change_required=False, mfa_required=False)
+                password_change_required=False)
     db.add(user)
     db.commit()
     return user

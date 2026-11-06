@@ -174,6 +174,16 @@ describe('First Login Figma states and restricted flow', () => {
     expect(screen.getByLabelText('Username')).toHaveValue('')
     expect(screen.getByLabelText('Password')).toHaveValue('')
     expect(screen.queryByText('Authentication complete.')).not.toBeInTheDocument()
+    fetcher.mockImplementation((...args) => args[0] === '/api/v1/auth/login'
+      ? Promise.resolve(reply('authenticated', 200, false))
+      : Promise.resolve(reply('unauthenticated', 401, false)))
+    await user.type(screen.getByLabelText('Username'), 'temporary-test-user')
+    await user.type(screen.getByLabelText('Password'), 'ReplacementPassword456!')
+    await user.click(screen.getByRole('button', { name: 'Sign In' }))
+    expect(await screen.findByText('Authentication complete.')).toBeVisible()
+    expect(window.location.pathname).toBe('/')
+    expect(fetcher.mock.calls.every(([url]) => ['/api/v1/auth/login', '/api/v1/auth/session',
+      '/api/v1/auth/password/challenge', '/api/v1/auth/password/change'].includes(String(url)))).toBe(true)
   })
 
   it('does not enable password replacement from a response state alone', async () => {

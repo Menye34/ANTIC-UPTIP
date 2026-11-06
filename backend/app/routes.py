@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .database import get_db
-from .models import AuthSession, MfaCredential, User
+from .models import AuthSession, User
 from .schemas import AuthResponse, LoginRequest
 from .security import can_activate, digest
 from .service import authenticate, audit
@@ -33,13 +33,9 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
                                        request.client.host if request.client else 'unknown',
                                        request.cookies.get(settings.cookie_name))
     password_pending = result.pop('_password_token', None)
-    pending = result.pop('_pending_token', None)
     response = JSONResponse(status_code=status, content=AuthResponse(**result).model_dump())
     if password_pending:
         response.set_cookie(settings.password_cookie_name, password_pending, httponly=True, secure=settings.cookie_secure,
-                            samesite='strict', max_age=300, path='/')
-    if pending:
-        response.set_cookie(settings.challenge_cookie_name, pending, httponly=True, secure=settings.cookie_secure,
                             samesite='strict', max_age=300, path='/')
     if token:
         response.set_cookie(settings.cookie_name, token, httponly=True, secure=settings.cookie_secure,
@@ -58,10 +54,7 @@ def current_session(request, db):
         return session, None
     user = db.get(User, session.user_id)
     # Gates are rechecked on every request, so changed policy invalidates old sessions.
-    credential = db.get(MfaCredential, session.mfa_credential_id) if session.mfa_credential_id else None
-    from .mfa_service import development_enabled
-    mfa_verified = bool(user and credential and credential.user_id == user.id and development_enabled(get_settings(), user))
-    if user is None or not can_activate(user, mfa_verified=mfa_verified):
+    if user is None or not can_activate(user):
         return None, None
     return session, user
 

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import password_service
 from app.config import get_settings
-from app.models import AuthEvent, AuthSession, MfaChallenge, MfaCredential, PasswordChangeChallenge
+from app.models import AuthEvent, AuthSession, PasswordChangeChallenge
 from app.security import digest, hasher, verify_password
 
 # Test-fixture credentials only; nothing is seeded in the application database.
@@ -124,17 +124,11 @@ def test_origin_and_csrf_cannot_be_bypassed(client, temporary_user):
 
 def test_replacement_revokes_sessions_and_all_pending_challenges(client, temporary_user, db):
     csrf = begin(client)
-    credential = MfaCredential(user_id=temporary_user.id, secret_ciphertext='unusable-test-fixture-ciphertext')
-    db.add(credential)
-    db.flush()
     db.add(AuthSession(token_hash='a' * 64, csrf_hash='b' * 64, user_id=temporary_user.id,
         expires_at=password_service.now() + timedelta(minutes=20)))
-    db.add(MfaChallenge(token_hash='c' * 64, user_id=temporary_user.id, credential_id=credential.id,
-        password_fingerprint=digest(temporary_user.password_hash), expires_at=password_service.now() + timedelta(minutes=5), environment='test'))
     db.commit()
     assert change(client, csrf).json()['state'] == 'password_changed'
     assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
-    assert all(c.consumed for c in db.scalars(select(MfaChallenge)))
     assert all(c.consumed for c in db.scalars(select(PasswordChangeChallenge)))
 
 
@@ -149,16 +143,6 @@ def test_concurrent_changes_accept_only_one(client, temporary_user, engine):
         outcomes = list(pool.map(attempt, range(2)))
     assert outcomes.count('password_changed') == 1
     assert outcomes.count('challenge_expired') == 1
-
-
-def test_mfa_requirement_is_not_bypassed_after_replacement(client, temporary_user, db):
-    temporary_user.mfa_required = True
-    db.commit()
-    csrf = begin(client)
-    assert change(client, csrf).json()['state'] == 'password_changed'
-    response = client.post('/api/v1/auth/login', json={'username': 'analyst-01', 'password': REPLACEMENT})
-    assert response.json()['state'] == 'mfa_enrollment_required'
-    assert client.get('/api/v1/auth/session').status_code == 401
 
 
 def test_password_fingerprint_and_status_are_rechecked(client, temporary_user, db):

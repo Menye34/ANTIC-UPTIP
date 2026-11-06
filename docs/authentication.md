@@ -66,23 +66,22 @@ Supply a role name from the approved UPTIP catalogue (not provided in this repo)
 PYTHONPATH=backend .venv/bin/python -m app.provision --username analyst-01 --role '<approved-role-name>'
 ```
 
-Default provisioning requires password replacement and MFA, so login returns a
-pending state with no session. To exercise the complete session path **only with
-an explicitly permitted development account policy**:
+Default provisioning requires password replacement, so login returns a restricted
+challenge with no session. After replacement, sign in again with the new password.
+For an already-provisioned password in a disposable development account:
 
 ```bash
-PYTHONPATH=backend .venv/bin/python -m app.provision --username '<development-username>' --role '<approved-role-name>' --password-already-replaced --mfa-not-required
+PYTHONPATH=backend .venv/bin/python -m app.provision --username '<development-username>' --role '<approved-role-name>' --password-already-replaced
 ```
 
-These flags do not disable gates globally and cannot satisfy MFA for an enrolled
-account. Password input must be at least 12 characters; no password is accepted
+Password input must be at least 12 characters; no password is accepted
 through command-line arguments. Duplicate usernames fail rather than overwriting
 accounts. Provisioning does not implement production account administration.
 
 ## API and state contract
 
 All authentication responses have `state`, `message`, `next_step_available`
-(default false), and `csrf_token` (null except a completed login). Login accepts
+(default false), and `csrf_token` (also returned for a restricted password-change challenge). Login accepts
 only JSON `{ "username": "...", "password": "..." }`. Username is case-sensitive,
 1–128 ASCII letters/digits/`._@-`, starts alphanumeric; passwords are 1–1024
 characters and are never trimmed. Additional JSON keys are rejected. Request
@@ -99,9 +98,7 @@ bodies over 8192 bytes are rejected before JSON parsing, including chunked bodie
 | `invalid_credentials` | 401 | Unknown usernames and incorrect passwords (including disabled/locked accounts) share the approved generic message. |
 | `account_unavailable` | 403 | Disclosed for a disabled/locked account only after verifying its correct password; no session issued. |
 | `password_change_required` | 200 | Valid temporary credentials issue a restricted password-change challenge; First Login must complete, then fresh Login is required. No session is granted. |
-| `mfa_enrollment_required` | 200 | Policy requires MFA and enrollment is absent; no session. |
-| `mfa_verification_required` | 200 | Enrolled or required MFA; no session, including when a historic verification timestamp exists. |
-| `authenticated` | 200 | Only active users with no password-change requirement and no required/enrolled MFA receive a session. |
+| `authenticated` | 200 | Only active users with no password-change requirement  receive a session. |
 | `rate_limited` | 429 | Wait for the fixed-window expiry; Retry-After supplied conservatively. |
 | `invalid_request` | 413/422 | Generic response without submitted values. |
 | `forbidden` | 403 | Origin/CSRF check failed. |
@@ -110,10 +107,8 @@ bodies over 8192 bytes are rejected before JSON parsing, including chunked bodie
 | `unavailable` | 503 | Database error, no internal details exposed. |
 
 First Login password replacement now uses a purpose-bound, expiring challenge;
-see [First Login](first-login.md). MFA Verification is available through the
-explicit development harness described in [MFA Verification](mfa-verification.md).
-MFA enrollment UI and the production MFA policy adapter remain unimplemented.
-Neither pending challenge is an authenticated session or grants protected access.
+see [First Login](first-login.md). A pending password-change challenge is not an
+authenticated session and grants no protected access.
 
 ## Security mechanisms and operational limits
 
@@ -127,10 +122,11 @@ Neither pending challenge is an authenticated session or grants protected access
   Path=/, no Domain; default 30-minute absolute expiry. New login revokes the
   previous cookie's session. Other devices retain their sessions until expiry or
   policy change. No remember-me/refresh token is implemented.
-- Every protected request checks active status and password/MFA policy again.
+- Every protected request checks active status and password-change requirement again.
   All future state-changing cookie-authenticated routes must reuse Origin and
-  constant-time synchronizer-token checks; currently logout is the only one.
-  Login has strict Origin validation to prevent login CSRF.
+  constant-time synchronizer-token checks; logout and password replacement both enforce these protections.
+  Login has strict Origin validation to prevent login CSRF. Password replacement
+  separately validates its restricted challenge, Origin and purpose-bound CSRF token.
 - Database-backed atomic fixed-window buckets shared across processes: default
   30 attempts per source IP and 10 per username in 900 seconds. Valid and failed
   login attempts both count. Windows may allow a burst across a boundary; no
@@ -189,7 +185,7 @@ must contain `test`; never point this at production. Without the test URL,
 integration tests explicitly skip (not pass). Tests run Alembic downgrade/upgrade,
 compare the schema with SQLAlchemy models, and exercise PostgreSQL atomic limits,
 valid/invalid credentials, account states, sessions, expiry, rotation, CSRF,
-MFA/password gates, audit safety and bounded request bodies.
+password-change gates, audit safety and bounded request bodies.
 
 Frontend tests use jsdom with mocked transport only; production code never mocks
 responses. They verify Default, empty-field blocking, actual fetch contract,
@@ -240,8 +236,8 @@ intentional logout UI must call clearKnownSession after successful logout.
 
 ### Manual Kali test checklist
 
-Pull feat/authentication-module and use the startup commands above. No new
-migration or configuration variable is required for the Login scenario changes.
+Pull feat/authentication-module and use the startup commands above. Migration 0004 is required for the current authentication schema; see below.
+No new configuration variable is required.
 
 1. Open http://localhost:5173 at 1440 × 900. Confirm Default has empty fields and
    a gray disabled button. Fill just one field: it remains disabled. Fill both:
@@ -259,14 +255,110 @@ migration or configuration variable is required for the Login scenario changes.
    Restore the account status afterward; never perform this on production users.
 6. Switch Caps Lock on while typing, then off. Confirm the amber text appears
    below password and disappears, without altering the button's readiness.
-7. Complete login using a development account explicitly permitted to use
-   password-only authentication. For a quick expiry test set
+7. Complete login using an active development account whose password has
+   already been replaced. For a quick expiry test set
    UPTIP_SESSION_SECONDS=60, restart the backend, sign in, wait past 60 seconds,
    then focus the window or wait for the next 30-second check. Expect Session
    Expired with empty fields. An ordinary first visit must never show it.
 8. Stop the backend and submit: receive a retryable non-sensitive service error,
    retain credentials and restore the button. Resume backend service and retry.
 
-MFA/password-change accounts still stop at their safe pending response; their UI
-and dashboard navigation remain out of scope. Local automated tests check the
+Temporary-password accounts open First Login, replace their password and return
+to Login. Dashboard/workspace navigation remains unimplemented in this branch. Local automated tests check the
 actual CSS color rules in jsdom and the DOM/API contracts, not a pixel screenshot.
+
+## Permanent MFA removal: migration 0004
+
+MFA is removed, with no enable/disable flag or authenticator dependency. Active
+users with a replaced password receive the existing secure session immediately.
+First Login still requires a verified temporary password, restricted challenge,
+password replacement and a fresh Login. Login/First Login layouts are unchanged.
+Roles remain server-assigned records; the client cannot select a role on Login.
+This branch has no workspace router or role-specific resource endpoints yet, so
+workspace navigation and a complete resource-authorization policy remain pending.
+No new workspace, role catalogue or authorization bypass was introduced.
+
+0001–0003 are unchanged. Revision 0004 follows 0003 and drops the session-to-MFA
+foreign key and column, then mfa_challenges and mfa_credentials, then the three
+users.mfa_* columns. It retains users, roles, password hashes, status, password
+challenges, all audit events (including historical MFA events), session tokens,
+CSRF hashes and expiration timestamps. Existing sessions remain compatible with
+the password-only policy; active status, password-change gates and expiry still
+apply on every protected request. MFA-only lockout data is removed; users.status
+locked/disabled remains enforced. Existing MFA challenge cookies are ignored,
+expire naturally after five minutes, and cannot authorize any request.
+
+**Do not apply this destructive migration to an application database without
+explicit approval and a verified backup.** Stop the old backend before applying
+it and deploy the matching code together. Review the generated SQL first:
+
+```bash
+.venv/bin/alembic -c backend/alembic.ini current
+.venv/bin/alembic -c backend/alembic.ini upgrade 0003:0004 --sql
+# Only after approval, backup and stopping the old backend:
+.venv/bin/alembic -c backend/alembic.ini upgrade 0004
+```
+
+Only disposable test databases were migrated during implementation. Downgrade
+restores empty MFA tables, sets users to enrollment-required and revokes all
+sessions: password-only sessions must not satisfy the old authentication policy.
+Deleted secrets/enrollment state cannot be recovered by downgrade; restore a
+verified backup if those records are required. It preserves user credentials,
+roles, statuses and audit events. Do not pair old application code with 0004.
+
+PyOTP and cryptography were exclusive to MFA and are removed from requirements.
+Use a fresh virtual environment for a clean dependency installation. Remove old
+UPTIP_DEV_MFA_USERNAME, UPTIP_DEV_MFA_MAX_ATTEMPTS and UPTIP_MFA_ENCRYPTION_KEY
+entries from your local deployment configuration; none are used anymore. Never
+commit populated environment files. Historical migrations retain MFA names so
+existing installations can upgrade safely without rewriting migration history.
+
+## MFA-removal verification and file inventory
+
+Executed on 06 November 2026: 46 frontend tests passed; 33 backend tests passed
+against disposable PostgreSQL. Lint, TypeScript/production build and diff whitespace
+checks passed. Backend coverage includes 0003 → 0004 preservation, fail-closed
+rollback, model/schema comparison, sessions, password replacement, CSRF, origin,
+status restrictions, rate limits and audit records. The role test proves server
+assignment cannot be overridden by a Login payload; it does not claim a completed
+role-specific resource policy. One upstream Starlette/httpx deprecation warning
+and npm's environment http-proxy warning remain. No application database was
+migrated, no Git stash was applied/deleted, and no commit or push was made.
+
+| Change | File |
+| --- | --- |
+| Modified | `.env.example` |
+| Modified | `README.md` |
+| Modified | `backend/app/config.py` |
+| Modified | `backend/app/main.py` |
+| Deleted | `backend/app/mfa_provision.py` |
+| Deleted | `backend/app/mfa_routes.py` |
+| Deleted | `backend/app/mfa_service.py` |
+| Modified | `backend/app/models.py` |
+| Modified | `backend/app/password_routes.py` |
+| Modified | `backend/app/password_service.py` |
+| Modified | `backend/app/provision.py` |
+| Modified | `backend/app/routes.py` |
+| Modified | `backend/app/schemas.py` |
+| Modified | `backend/app/security.py` |
+| Modified | `backend/app/service.py` |
+| Modified | `backend/requirements.txt` |
+| Modified | `backend/tests/conftest.py` |
+| Modified | `backend/tests/test_auth.py` |
+| Deleted | `backend/tests/test_mfa.py` |
+| Modified | `backend/tests/test_password_change.py` |
+| Modified | `docs/authentication.md` |
+| Modified | `docs/first-login.md` |
+| Deleted | `docs/mfa-verification.md` |
+| Modified | `src/App.tsx` |
+| Deleted | `src/assets/mfa-warning.svg` |
+| Modified | `src/components/FirstLogin.test.tsx` |
+| Modified | `src/components/Login.test.tsx` |
+| Modified | `src/components/Login.tsx` |
+| Deleted | `src/components/MfaVerification.css` |
+| Deleted | `src/components/MfaVerification.test.tsx` |
+| Deleted | `src/components/MfaVerification.tsx` |
+| Modified | `src/services/auth.ts` |
+| Deleted | `src/services/mfa.ts` |
+| Created | `backend/migrations/versions/0004_remove_mfa.py` |
+| Created | `backend/tests/test_remove_mfa_migration.py` |

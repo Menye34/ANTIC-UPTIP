@@ -44,25 +44,14 @@ def test_unknown_and_wrong_password_do_not_disclose_account_state(client, user, 
     assert 'account_unavailable' in db.scalars(select(AuthEvent.reason)).all()
 
 
-@pytest.mark.parametrize('change,required,enrolled,expected', [
-    (True, True, True, 'password_change_required'),
-    (False, True, False, 'mfa_enrollment_required'),
-    (False, True, True, 'mfa_verification_required'),
-    (False, False, True, 'mfa_verification_required'),
-])
-def test_pending_never_issues_session(client, user, db, change, required, enrolled, expected):
-    user.password_change_required = change
-    user.mfa_required = required
-    user.mfa_enrolled = enrolled
-    user.mfa_verified_at = datetime.now(timezone.utc)  # Historic verification cannot bypass new MFA.
+def test_pending_never_issues_session(client, user, db):
+    user.password_change_required = True
     db.commit()
     response = login(client)
-    assert response.json()['state'] == expected
-    assert response.json()['next_step_available'] is change
-    assert bool(response.json()['csrf_token']) is change
+    assert response.json()['state'] == 'password_change_required'
+    assert response.json()['next_step_available'] is True
+    assert response.json()['csrf_token']
     assert '__Host-uptip_session' not in client.cookies
-    if not change:
-        assert 'set-cookie' not in response.headers
     assert client.get('/api/v1/auth/session').status_code == 401
     assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
 
@@ -202,3 +191,33 @@ def test_atomic_throttle_across_connections(engine):
             assert list(pool.map(attempt, range(6))).count(False) == 3
     finally:
         settings.username_limit = original
+
+
+@pytest.mark.parametrize('status', ['disabled', 'locked'])
+def test_account_status_change_rejects_existing_session(client, user, db, status):
+    assert login(client).json()['state'] == 'authenticated'
+    user.status = status
+    db.commit()
+    assert client.get('/api/v1/auth/session').status_code == 401
+
+
+def test_authenticated_session_keeps_server_assigned_role(client, user, db):
+    from starlette.requests import Request
+    from app.routes import current_session
+    from app.models import Role
+    db.add(Role(name='other-test-role'))
+    db.commit()
+    # Client cannot select or override a role on login.
+    rejected = client.post(LOGIN, json={'username': user.username, 'password': 'test-password', 'role': 'other-test-role'})
+    assert rejected.status_code == 422
+    login(client)
+    token = client.cookies.get('__Host-uptip_session')
+    request = Request({'type': 'http', 'headers': [(b'cookie', f'__Host-uptip_session={token}'.encode())]})
+    session, principal = current_session(request, db)
+    assert session and principal.id == user.id
+    assert principal.role == 'test-fixture-role'
+
+
+def test_removed_endpoints_are_not_registered(client):
+    assert client.post('/api/v1/auth/mfa/verify', json={'code': '123456'}).status_code == 404
+    assert client.get('/api/v1/auth/mfa/challenge').status_code == 404

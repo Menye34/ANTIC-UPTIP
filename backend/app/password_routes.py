@@ -28,7 +28,7 @@ def change(body: PasswordChangeRequest, request: Request, db: Session = Depends(
         request.client.host if request.client else 'unknown')
     response = JSONResponse(status_code=status, content=AuthResponse(**result).model_dump())
     if result['state'] == 'password_changed':
-        for name in (settings.password_cookie_name, settings.challenge_cookie_name, settings.cookie_name):
+        for name in (settings.password_cookie_name, settings.cookie_name):
             response.delete_cookie(name, path='/', secure=settings.cookie_secure, httponly=True, samesite='strict')
     if status == 429:
         response.headers['Retry-After'] = str(settings.rate_window_seconds)

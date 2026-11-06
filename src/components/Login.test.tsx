@@ -207,7 +207,7 @@ describe('Figma Login scenarios', () => {
     expect(screen.getByRole('button', { name: 'Sign In' })).toBeEnabled()
   })
 
-  it.each(['password_change_required', 'mfa_enrollment_required', 'mfa_verification_required'])(
+  it.each(['password_change_required'])(
     'does not claim completion or navigate for %s', async (state) => {
       const href = window.location.href
       post.mockResolvedValue(reply(state))

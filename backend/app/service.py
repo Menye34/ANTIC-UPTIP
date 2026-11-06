@@ -51,8 +51,6 @@ def authenticate(db, settings, username, password, ip, old_token=None):
         user.password_hash = hasher.hash(password)
     if user.password_change_required:
         state = 'password_change_required'
-    elif user.mfa_required or user.mfa_enrolled:
-        state = 'mfa_verification_required' if user.mfa_enrolled else 'mfa_enrollment_required'
     else:
         state = 'authenticated'
     audit(db, state, ip_key, user)
@@ -61,14 +59,6 @@ def authenticate(db, settings, username, password, ip, old_token=None):
         pending = begin(db, settings, user)
         db.commit()
         return 200, pending, None
-    if state == 'mfa_verification_required':
-        from .mfa_service import begin
-        if pending := begin(db, settings, user):
-            db.commit()
-            return 200, pending, None
-    if state != 'authenticated':
-        db.commit()
-        return 200, {'state': state, 'message': 'Additional authentication is required. This step is not yet available.'}, None
     assert can_activate(user)
     if old_token:
         previous = db.get(AuthSession, digest(old_token))

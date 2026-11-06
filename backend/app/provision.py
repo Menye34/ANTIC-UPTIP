@@ -16,7 +16,6 @@ def main():
     parser.add_argument('--username', required=True)
     parser.add_argument('--role', required=True, help='An approved UPTIP role name; no default is assumed')
     parser.add_argument('--password-already-replaced', action='store_true')
-    parser.add_argument('--mfa-not-required', action='store_true', help='Development policy only')
     args = parser.parse_args()
     password = getpass('Password (at least 12 characters): ')
     if len(password) < 12 or password != getpass('Confirm password: '):
@@ -27,8 +26,7 @@ def main():
             db.add(Role(name=args.role))
             db.flush()
         db.add(User(username=args.username, role=args.role, password_hash=hasher.hash(password),
-                    password_change_required=not args.password_already_replaced,
-                    mfa_required=not args.mfa_not_required))
+                    password_change_required=not args.password_already_replaced))
         db.commit()
     print('Development account created. No credentials are printed.')
 

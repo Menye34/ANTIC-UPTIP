@@ -12,13 +12,13 @@ type Notice = { message: string; tone: 'error' | 'info'; dismissOnEdit?: boolean
 const SESSION_ENDED = 'Your session has ended. Sign in again to continue.'
 
 /** Authentication Login scenarios: actual Figma frames, without review wrappers. */
-export default function Login({ onMfaRequired, onPasswordChangeRequired, initialSuccess = false }: { onMfaRequired?: () => void; onPasswordChangeRequired?: () => void; initialSuccess?: boolean }) {
+export default function Login({ onPasswordChangeRequired }: { onPasswordChangeRequired?: () => void }) {
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [capsLock, setCapsLock] = useState(false)
   const [pending, setPending] = useState(false)
-  const [notice, setNotice] = useState<Notice | null>(initialSuccess ? { message: 'Authentication complete.', tone: 'info' } : null)
+  const [notice, setNotice] = useState<Notice | null>(null)
   const inFlight = useRef(false)
   const generation = useRef(0)
   const ready = username.trim().length > 0 && password.length > 0
@@ -89,18 +89,13 @@ export default function Login({ onMfaRequired, onPasswordChangeRequired, initial
         onPasswordChangeRequired()
         return
       }
-      if (result.state === 'mfa_verification_required' && result.next_step_available && onMfaRequired) {
-        setPassword('')
-        onMfaRequired()
-        return
-      }
       const error = result.state === 'invalid_credentials'
       setNotice({ message: outcomeMessage(result), tone: error ? 'error' : 'info',
         dismissOnEdit: error || result.state === 'account_unavailable' })
       // Figma retains both values for invalid credentials; unavailable clears only password.
       if (result.state !== 'invalid_credentials') setPassword('')
       if (result.state === 'authenticated') rememberSession()
-      // No dashboard, MFA or password-replacement navigation is implemented here.
+      // Workspace navigation is not implemented in this branch.
     } catch {
       if (version !== generation.current) return
       setNotice({ message: 'Unable to reach the sign-in service. Please try again.', tone: 'info' })

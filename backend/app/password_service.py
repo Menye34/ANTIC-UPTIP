@@ -5,7 +5,7 @@ import unicodedata
 
 from sqlalchemy import delete, select, update
 
-from .models import AuthSession, MfaChallenge, PasswordChangeChallenge, User
+from .models import AuthSession, PasswordChangeChallenge, User
 from .security import client_key, digest, hasher, verify_password
 from .service import audit, throttled
 
@@ -86,7 +86,6 @@ def change(db, settings, raw, csrf, new_password, confirmation, ip):
     user.password_change_required = False
     # All updates and revocations commit together; no authentication session is granted here.
     db.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
-    db.execute(update(MfaChallenge).where(MfaChallenge.user_id == user.id).values(consumed=True))
     db.execute(update(PasswordChangeChallenge).where(PasswordChangeChallenge.user_id == user.id).values(consumed=True))
     audit(db, 'password_changed', ip_key, user)
     db.commit()

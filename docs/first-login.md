@@ -6,7 +6,7 @@ Actual Figma implementation frames inspected: `254:17724` (Default) and
 `254:17786` (Passwords Don't Match), Authentication page in ANTIC_UPTIP.
 FirstLogin is one React component at `/first-login`, using AuthBrand, the existing
 480px authentication card, inputs, visibility icons, alert styles, fonts and
-responsive spacing. No Figma design, Login styling or MFA layout was modified.
+responsive spacing. No Figma design or Login styling was modified.
 The default layout is approximately 480 × 579px and the mismatch layout grows by
 one existing alert block. Card heights remain content-driven on smaller screens.
 
@@ -34,7 +34,7 @@ URL or browser storage. Sensitive form values are cleared on completion/unmount.
 
 | Endpoint | Contract |
 | --- | --- |
-| Existing POST `/api/v1/auth/login` | Correct temporary password and active account issue a password-change challenge before MFA. |
+| Existing POST `/api/v1/auth/login` | Correct temporary password and active account issue a password-change challenge without granting an authenticated session. |
 | GET `/api/v1/auth/password/challenge` | Verify pending cookie, password fingerprint, account state, environment and expiry; return purpose-bound CSRF token. |
 | POST `/api/v1/auth/password/change` | JSON `new_password` and `confirmation`; trusted Origin and X-CSRF-Token required. |
 
@@ -44,12 +44,11 @@ It is HttpOnly, SameSite=Strict, Path=/ and Secure according to the existing
 validated environment settings. Its lifetime is five minutes. The token contains
 256 bits of cryptographic randomness; only its SHA-256 digest is stored. The
 challenge binds user ID, password-hash fingerprint and environment. The CSRF HMAC
-uses a password-change-specific domain, distinct from MFA and normal sessions.
+uses a password-change-specific domain, distinct from normal sessions.
 No new configuration secret or dependency is needed.
 
 The challenge can only be created after real password verification and account
-eligibility checks. It cannot access the protected session endpoint, authorize MFA
-verification, or become an authenticated session. The replacement endpoint reuses
+eligibility checks. It cannot access the protected session endpoint, become an authenticated session. The replacement endpoint reuses
 existing shared IP and per-subject rate limits and takes user → challenge row locks.
 A replay, changed password credential, disabled account, cleared requirement or
 expired challenge is rejected. Concurrent submissions can succeed only once.
@@ -58,15 +57,14 @@ Replacement enforces matching confirmation and all complexity checks, rejects
 reuse of the current temporary password with Argon2id verification, hashes the new
 password using the existing hasher and clears password_change_required. Within the
 same transaction it revokes this user's existing AuthSessions and consumes all of
-this user's password-change and MFA challenges, then records password_changed.
-MFA credentials, replay counters, lockout state and policy are not reset.
+this user's password-change challenges, then records password_changed.
+General account restrictions and rate limits remain enforced.
 
 Success returns `password_changed`, not `authenticated`. No normal session is
 created. Cookies for the completed flow are cleared, the page clears sensitive
 state and returns to empty Login. The user must authenticate using the new
-password. Existing backend account and MFA rules then choose the next step; no
-MFA enrollment/verification or role workflow is bypassed. Production MFA policy
-and MFA Setup UI remain separate dependencies, unchanged by this feature.
+password. Active accounts without a password-change requirement then receive a
+secure authenticated session. Workspace navigation remains unimplemented.
 
 Other response states reuse AuthResponse: password_mismatch (422),
 password_rejected (422), challenge_expired (401), forbidden (403), rate_limited
@@ -75,11 +73,12 @@ audit records. Existing validation-error redaction and SQL parameter hiding rema
 
 ## Migration
 
-Alembic revision `0003`, after `0002`, creates password_change_challenges with a
+Alembic revision `0003`, after `0002`, created password_change_challenges with a
 hashed-token primary key, user FK, password fingerprint, expiry, consumed flag and
 environment. User.password_change_required is reused. There are no account,
 credential, role or policy seeds and no existing account flags are changed by the
-migration. Periodically purge expired/consumed challenges through trusted database
+migration. Current head is `0004`; see the approval/backup requirements in
+[Authentication setup](authentication.md) before applying it. Periodically purge expired/consumed challenges through trusted database
 maintenance, alongside the existing challenge/session retention process.
 
 ## Exact localhost setup and test commands
@@ -93,7 +92,8 @@ git switch feat/authentication-module
 git pull --ff-only origin feat/authentication-module
 npm ci
 .venv/bin/pip install -r backend/requirements-dev.txt
-.venv/bin/alembic -c backend/alembic.ini upgrade head
+# Apply migration 0004 only after approval and backup (see authentication.md).
+.venv/bin/alembic -c backend/alembic.ini upgrade 0004
 ```
 
 Create a new, disposable development account with the default temporary-password
@@ -106,7 +106,7 @@ PYTHONPATH=backend .venv/bin/python -m app.provision --username '<new-developmen
 ```
 
 Do not pass --password-already-replaced: the account must require First Login.
-Do not disable MFA to force completion. Start the backend in one terminal:
+Start the backend in one terminal:
 
 ```bash
 .venv/bin/uvicorn app.main:create_app --factory --app-dir backend --host 127.0.0.1 --port 8000 --no-proxy-headers
@@ -124,8 +124,8 @@ appears, independently test both eye controls, then enter a compliant password a
 a different confirmation. Blur confirmation to inspect the red Figma alert.
 Correct confirmation: the button enables. Submit and confirm return to Login with
 empty fields. The old password must fail; the new password must be accepted and
-then follow the account's existing MFA requirement. An MFA-required, unenrolled
-account will stop at the existing enrollment-required response; this is expected.
+then receive a secure authenticated session. Workspace navigation remains
+unimplemented; Login shows Authentication complete.
 Opening /first-login without a challenge must return to Login. A five-minute-old
 challenge must not replace a password, even if the form remains open.
 
@@ -143,51 +143,12 @@ Use a disposable database whose name contains test; the backend suite migrates a
 truncates it. Credentials in test fixtures are not application seeds. The suite
 covers challenge issuance/expiry/replay, complexity, mismatch, temporary-password
 reuse, CSRF/origin, concurrent changes, revocation, audit safety and fresh Login.
-It also runs existing Login and MFA tests and compares migrations with models.
+It also runs existing Login tests and compares migrations with models.
 
-## Verification performed and limits
+## Verification and limits
 
-Frontend: 61 tests passed, lint passed, production build/type checks passed.
-Backend: 46 tests passed against PostgreSQL, including migration downgrade/upgrade
-and schema comparison. One upstream Starlette/httpx test-client deprecation warning
-remains. No tests were marked passing without execution.
-
-A real localhost smoke check started npm run dev and Uvicorn with a temporary,
-isolated PostgreSQL database and generated, uncommitted credentials. Through
-Vite's API proxy it verified SPA/module/logo serving, missing-challenge denial,
-correct temporary-password login, mismatch rejection, successful replacement,
-absence of an authenticated session, rejection of the old password and acceptance
-of the new password with the MFA enrollment gate still enforced. The temporary
-database was deleted afterward; no application database was modified.
-
-The Figma references and DOM/CSS states were inspected/tested. A rendered browser
-comparison remains for Kali because the hosted Chromium process cannot create its
-required Unix socket. No pixel-perfect screenshot comparison is claimed.
-
-## File inventory
-
-| Change | File |
-| --- | --- |
-| Modified | `README.md` |
-| Modified | `backend/app/config.py` |
-| Modified | `backend/app/main.py` |
-| Modified | `backend/app/models.py` |
-| Modified | `backend/app/routes.py` |
-| Modified | `backend/app/schemas.py` |
-| Modified | `backend/app/service.py` |
-| Modified | `backend/tests/test_auth.py` |
-| Modified | `backend/tests/test_mfa.py` |
-| Modified | `docs/authentication.md` |
-| Modified | `docs/mfa-verification.md` |
-| Modified | `src/App.tsx` |
-| Modified | `src/components/Login.tsx` |
-| Modified | `src/services/auth.ts` |
-| Created | `backend/app/password_routes.py` |
-| Created | `backend/app/password_service.py` |
-| Created | `backend/migrations/versions/0003_password_change.py` |
-| Created | `backend/tests/test_password_change.py` |
-| Created | `docs/first-login.md` |
-| Created | `src/components/FirstLogin.css` |
-| Created | `src/components/FirstLogin.test.tsx` |
-| Created | `src/components/FirstLogin.tsx` |
-| Created | `src/services/password.ts` |
+The current removal tests cover password replacement, challenge expiry/replay,
+CSRF/Origin, concurrency, session revocation, fresh Login and migration preservation.
+See Authentication setup for the disposable PostgreSQL test commands and migration
+approval requirements. Browser/Figma pixel comparison is not claimed. No Login or
+First Login stylesheet/assets were changed by MFA removal.
