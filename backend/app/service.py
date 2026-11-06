@@ -56,6 +56,11 @@ def authenticate(db, settings, username, password, ip, old_token=None):
     else:
         state = 'authenticated'
     audit(db, state, ip_key, user)
+    if state == 'mfa_verification_required':
+        from .mfa_service import begin
+        if pending := begin(db, settings, user):
+            db.commit()
+            return 200, pending, None
     if state != 'authenticated':
         db.commit()
         return 200, {'state': state, 'message': 'Additional authentication is required. This step is not yet available.'}, None

@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -32,6 +32,7 @@ class User(Base):
 class AuthSession(Base):
     __tablename__ = 'auth_sessions'
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mfa_credential_id: Mapped[UUID | None] = mapped_column(ForeignKey('mfa_credentials.id', ondelete='SET NULL'))
     csrf_hash: Mapped[str] = mapped_column(String(64))
     user_id: Mapped[UUID] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -52,3 +53,24 @@ class AuthEvent(Base):
     reason: Mapped[str] = mapped_column(String(40))
     client_key: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MfaCredential(Base):
+    __tablename__ = 'mfa_credentials'
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), unique=True)
+    secret_ciphertext: Mapped[str] = mapped_column(String(512))
+    last_accepted_step: Mapped[int | None] = mapped_column(BigInteger)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MfaChallenge(Base):
+    __tablename__ = 'mfa_challenges'
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    credential_id: Mapped[UUID] = mapped_column(ForeignKey('mfa_credentials.id', ondelete='CASCADE'))
+    password_fingerprint: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    environment: Mapped[str] = mapped_column(String(16))

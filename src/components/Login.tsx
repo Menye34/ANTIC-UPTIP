@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { clearKnownSession, hasKnownSession, inspectSession, outcomeMessage, rememberSession, signIn } from '../services/auth'
-import uptipLogo from '../assets/uptip-logo.svg'
+import AuthBrand from './AuthBrand'
 import passwordHiddenIcon from '../assets/password-visibility.svg'
 import passwordVisibleIcon from '../assets/password-visible.svg'
 import errorIcon from '../assets/login-error.svg'
@@ -12,13 +12,13 @@ type Notice = { message: string; tone: 'error' | 'info'; dismissOnEdit?: boolean
 const SESSION_ENDED = 'Your session has ended. Sign in again to continue.'
 
 /** Authentication Login scenarios: actual Figma frames, without review wrappers. */
-export default function Login() {
+export default function Login({ onMfaRequired, initialSuccess = false }: { onMfaRequired?: () => void; initialSuccess?: boolean }) {
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [capsLock, setCapsLock] = useState(false)
   const [pending, setPending] = useState(false)
-  const [notice, setNotice] = useState<Notice | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(initialSuccess ? { message: 'Authentication complete.', tone: 'info' } : null)
   const inFlight = useRef(false)
   const generation = useRef(0)
   const ready = username.trim().length > 0 && password.length > 0
@@ -84,6 +84,11 @@ export default function Login() {
     try {
       const result = await signIn(username, password)
       if (version !== generation.current) return
+      if (result.state === 'mfa_verification_required' && result.next_step_available && onMfaRequired) {
+        setPassword('')
+        onMfaRequired()
+        return
+      }
       const error = result.state === 'invalid_credentials'
       setNotice({ message: outcomeMessage(result), tone: error ? 'error' : 'info',
         dismissOnEdit: error || result.state === 'account_unavailable' })
@@ -104,11 +109,7 @@ export default function Login() {
     <main className="login-page">
       <form className="login-card" aria-labelledby="login-heading" onSubmit={submit} aria-busy={pending}
         onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setCapsLock(false) }}>
-        <div className="login-brand">
-          <p className="login-institution">ANTIC</p>
-          <img className="login-logo" src={uptipLogo} width="108" height="25" alt="UPTIP" />
-          <p className="login-platform-name">Unified Penetration Testing Intelligent Platform</p>
-        </div>
+        <AuthBrand />
         <header className="login-heading">
           <h1 id="login-heading">Sign in to UPTIP</h1>
           <p>Secure access for authorized users.</p>

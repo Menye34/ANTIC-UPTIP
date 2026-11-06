@@ -24,8 +24,8 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-def can_activate(user) -> bool:
+def can_activate(user, mfa_verified=False) -> bool:
     # A historic MFA verification timestamp never satisfies a new login challenge.
-    return user.status == 'active' and not user.password_change_required and not (
-        user.mfa_required or user.mfa_enrolled
+    return user.status == 'active' and not user.password_change_required and (
+        not (user.mfa_required or user.mfa_enrolled) or (mfa_verified and user.mfa_enrolled)
     )

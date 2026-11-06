@@ -14,6 +14,8 @@ def create_app():
     get_settings()  # Fail closed at startup on missing/unsafe configuration.
     app = FastAPI(title='UPTIP Authentication', docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(router)
+    from .mfa_routes import router as mfa_router
+    app.include_router(mfa_router)
     app.add_middleware(BodyLimitMiddleware)
 
     @app.middleware('http')

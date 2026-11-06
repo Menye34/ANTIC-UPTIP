@@ -1,12 +1,13 @@
 export type AuthState = 'invalid_credentials' | 'account_unavailable' | 'password_change_required'
   | 'mfa_verification_required' | 'mfa_enrollment_required' | 'authenticated'
-  | 'rate_limited' | 'unavailable' | 'invalid_request' | 'forbidden' | 'unauthenticated' | 'session_expired'
+  | 'rate_limited' | 'unavailable' | 'invalid_request' | 'forbidden' | 'unauthenticated' | 'session_expired' | 'invalid_code' | 'code_expired' | 'too_many_attempts' | 'challenge_expired' | 'mfa_cancelled'
 
 export interface AuthResult {
   state: AuthState
   message: string
   next_step_available: boolean
   csrf_token: string | null
+  retry_after_seconds?: number | null
 }
 
 // Held only in memory for future cookie-authenticated mutations; never persisted.
@@ -68,4 +69,10 @@ export async function inspectSession(signal: AbortSignal): Promise<AuthResult> {
   if ((response.ok && result.state === 'authenticated') ||
       (response.status === 401 && ['unauthenticated', 'session_expired'].includes(result.state))) return result
   throw new Error('Session inspection unavailable')
+}
+
+export function acceptAuthenticatedSession(result: AuthResult) {
+  if (result.state !== 'authenticated') throw new Error('Authentication incomplete')
+  csrfToken = result.csrf_token
+  rememberSession()
 }

@@ -16,3 +16,7 @@ npm run dev
 ```
 
 Use the backend setup instructions before submitting the form.
+
+[MFA Verification development setup](docs/mfa-verification.md) documents the
+five Figma states, real TOTP challenge flow, explicit development harness and
+unresolved production-policy dependency.
