@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 State = Literal['invalid_credentials', 'account_unavailable', 'password_change_required',
                 'mfa_verification_required', 'mfa_enrollment_required', 'authenticated',
                 'rate_limited', 'unavailable', 'invalid_request', 'forbidden', 'unauthenticated', 'session_expired', 'invalid_code', 'code_expired', 'too_many_attempts',
-                'challenge_expired', 'mfa_cancelled']
+                'challenge_expired', 'mfa_cancelled', 'password_mismatch', 'password_rejected', 'password_changed']
 
 
 class LoginRequest(BaseModel):
@@ -35,3 +35,9 @@ class MfaVerifyRequest(BaseModel):
         if not cls.valid_code(value.get_secret_value()):
             raise ValueError('Six digits required')
         return value
+
+
+class PasswordChangeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    new_password: SecretStr = Field(min_length=1, max_length=1024)
+    confirmation: SecretStr = Field(min_length=1, max_length=1024)

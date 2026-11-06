@@ -1,6 +1,6 @@
 export type AuthState = 'invalid_credentials' | 'account_unavailable' | 'password_change_required'
   | 'mfa_verification_required' | 'mfa_enrollment_required' | 'authenticated'
-  | 'rate_limited' | 'unavailable' | 'invalid_request' | 'forbidden' | 'unauthenticated' | 'session_expired' | 'invalid_code' | 'code_expired' | 'too_many_attempts' | 'challenge_expired' | 'mfa_cancelled'
+  | 'rate_limited' | 'unavailable' | 'invalid_request' | 'forbidden' | 'unauthenticated' | 'session_expired' | 'invalid_code' | 'code_expired' | 'too_many_attempts' | 'challenge_expired' | 'mfa_cancelled' | 'password_mismatch' | 'password_rejected' | 'password_changed'
 
 export interface AuthResult {
   state: AuthState

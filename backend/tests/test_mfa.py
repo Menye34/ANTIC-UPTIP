@@ -203,8 +203,8 @@ def test_password_replacement_precedes_mfa_and_unenrolled_stays_pending(client, 
     db.commit()
     response = client.post('/api/v1/auth/login', json={'username': user.username, 'password': 'test-password'})
     assert response.json()['state'] == 'password_change_required'
-    assert response.json()['next_step_available'] is False
-    assert not client.cookies
+    assert response.json()['next_step_available'] is True
+    assert '__Host-uptip_session' not in client.cookies
     user.password_change_required = False
     user.mfa_enrolled = False
     db.commit()

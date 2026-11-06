@@ -42,6 +42,10 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def password_cookie_name(self):
+        return '__Host-uptip_password_change' if self.cookie_secure else 'uptip_dev_password_change'
+
+    @property
     def challenge_cookie_name(self):
         return '__Host-uptip_mfa' if self.cookie_secure else 'uptip_dev_mfa'
 

@@ -12,7 +12,7 @@ type Notice = { message: string; tone: 'error' | 'info'; dismissOnEdit?: boolean
 const SESSION_ENDED = 'Your session has ended. Sign in again to continue.'
 
 /** Authentication Login scenarios: actual Figma frames, without review wrappers. */
-export default function Login({ onMfaRequired, initialSuccess = false }: { onMfaRequired?: () => void; initialSuccess?: boolean }) {
+export default function Login({ onMfaRequired, onPasswordChangeRequired, initialSuccess = false }: { onMfaRequired?: () => void; onPasswordChangeRequired?: () => void; initialSuccess?: boolean }) {
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -84,6 +84,11 @@ export default function Login({ onMfaRequired, initialSuccess = false }: { onMfa
     try {
       const result = await signIn(username, password)
       if (version !== generation.current) return
+      if (result.state === 'password_change_required' && result.next_step_available && onPasswordChangeRequired) {
+        setPassword('')
+        onPasswordChangeRequired()
+        return
+      }
       if (result.state === 'mfa_verification_required' && result.next_step_available && onMfaRequired) {
         setPassword('')
         onMfaRequired()

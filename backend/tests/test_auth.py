@@ -58,9 +58,11 @@ def test_pending_never_issues_session(client, user, db, change, required, enroll
     db.commit()
     response = login(client)
     assert response.json()['state'] == expected
-    assert response.json()['next_step_available'] is False
-    assert response.json()['csrf_token'] is None
-    assert 'set-cookie' not in response.headers
+    assert response.json()['next_step_available'] is change
+    assert bool(response.json()['csrf_token']) is change
+    assert '__Host-uptip_session' not in client.cookies
+    if not change:
+        assert 'set-cookie' not in response.headers
     assert client.get('/api/v1/auth/session').status_code == 401
     assert db.scalar(select(func.count()).select_from(AuthSession)) == 0
 

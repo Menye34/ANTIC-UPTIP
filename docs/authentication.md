@@ -98,7 +98,7 @@ bodies over 8192 bytes are rejected before JSON parsing, including chunked bodie
 | --- | --- | --- |
 | `invalid_credentials` | 401 | Unknown usernames and incorrect passwords (including disabled/locked accounts) share the approved generic message. |
 | `account_unavailable` | 403 | Disclosed for a disabled/locked account only after verifying its correct password; no session issued. |
-| `password_change_required` | 200 | Credentials verified; no session, no continuation token; UI explicitly says step unavailable. |
+| `password_change_required` | 200 | Valid temporary credentials issue a restricted password-change challenge; First Login must complete, then fresh Login is required. No session is granted. |
 | `mfa_enrollment_required` | 200 | Policy requires MFA and enrollment is absent; no session. |
 | `mfa_verification_required` | 200 | Enrolled or required MFA; no session, including when a historic verification timestamp exists. |
 | `authenticated` | 200 | Only active users with no password-change requirement and no required/enrolled MFA receive a session. |
@@ -109,12 +109,11 @@ bodies over 8192 bytes are rejected before JSON parsing, including chunked bodie
 | `session_expired` | 401 | Recognized expired session; expired browser cookie removed. |
 | `unavailable` | 503 | Database error, no internal details exposed. |
 
-Password replacement, MFA enrollment and per-login MFA verification remain
-unimplemented. Pending outcomes are informational only, confer no authority and
-cannot be exchanged at any endpoint. Consequently no pending challenge or
-partially authenticated session is created. A later task must add a short-lived,
-purpose-bound server-side challenge and real verification before those workflows
-can continue. No fake MFA or role-resolution UI is included.
+First Login password replacement now uses a purpose-bound, expiring challenge;
+see [First Login](first-login.md). MFA Verification is available through the
+explicit development harness described in [MFA Verification](mfa-verification.md).
+MFA enrollment UI and the production MFA policy adapter remain unimplemented.
+Neither pending challenge is an authenticated session or grants protected access.
 
 ## Security mechanisms and operational limits
 

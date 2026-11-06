@@ -74,3 +74,13 @@ class MfaChallenge(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     environment: Mapped[str] = mapped_column(String(16))
+
+
+class PasswordChangeChallenge(Base):
+    __tablename__ = 'password_change_challenges'
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    password_fingerprint: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    environment: Mapped[str] = mapped_column(String(16))

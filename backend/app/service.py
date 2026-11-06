@@ -56,6 +56,11 @@ def authenticate(db, settings, username, password, ip, old_token=None):
     else:
         state = 'authenticated'
     audit(db, state, ip_key, user)
+    if state == 'password_change_required':
+        from .password_service import begin
+        pending = begin(db, settings, user)
+        db.commit()
+        return 200, pending, None
     if state == 'mfa_verification_required':
         from .mfa_service import begin
         if pending := begin(db, settings, user):

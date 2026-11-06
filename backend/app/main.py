@@ -16,6 +16,8 @@ def create_app():
     app.include_router(router)
     from .mfa_routes import router as mfa_router
     app.include_router(mfa_router)
+    from .password_routes import router as password_router
+    app.include_router(password_router)
     app.add_middleware(BodyLimitMiddleware)
 
     @app.middleware('http')

@@ -12,8 +12,8 @@ reuse existing exact exports. No Figma content was changed.
 
 The repository has **no approved production MFA decision source or failed-attempt
 threshold**. This implementation does not invent either. Production Login keeps
-its existing behavior: password-change and MFA gates remain pending and cannot
-be bypassed. A production MFA policy adapter must be approved and implemented
+the existing MFA gating behavior; it cannot bypass required MFA. First Login
+password replacement is now implemented separately (see docs/first-login.md). A production MFA policy adapter must be approved and implemented
 before production can issue verification challenges. No policy-management UI is
 added. Existing account flags are preserved; they are not claimed to be a newly
 approved policy.
@@ -123,8 +123,8 @@ valid TOTP, and never deletes unrelated AuthSessions.
 No verification code or pending token is stored in browser storage or in a URL.
 The shared Login session-observation boolean remains non-sensitive. Successful
 MFA establishes a real session and returns to the existing Authentication Complete
-notice. Dashboard navigation, role dashboards, MFA Setup, QR enrollment UI and
-password-replacement UI remain outside this task.
+notice. Dashboard navigation, role dashboards, MFA Setup and QR enrollment UI
+remain outside this task. First Login is documented in docs/first-login.md.
 
 ## Kali Linux: pull, configure, run
 

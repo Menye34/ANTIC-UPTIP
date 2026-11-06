@@ -32,8 +32,12 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     status, result, token = authenticate(db, settings, body.username, body.password.get_secret_value(),
                                        request.client.host if request.client else 'unknown',
                                        request.cookies.get(settings.cookie_name))
+    password_pending = result.pop('_password_token', None)
     pending = result.pop('_pending_token', None)
     response = JSONResponse(status_code=status, content=AuthResponse(**result).model_dump())
+    if password_pending:
+        response.set_cookie(settings.password_cookie_name, password_pending, httponly=True, secure=settings.cookie_secure,
+                            samesite='strict', max_age=300, path='/')
     if pending:
         response.set_cookie(settings.challenge_cookie_name, pending, httponly=True, secure=settings.cookie_secure,
                             samesite='strict', max_age=300, path='/')
