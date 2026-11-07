@@ -8,6 +8,8 @@ export interface AuthResult {
   next_step_available: boolean
   csrf_token: string | null
   role?: string | null
+  username?: string | null
+  user_id?: string | null
   retry_after_seconds?: number | null
 }
 

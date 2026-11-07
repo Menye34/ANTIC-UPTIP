@@ -1,13 +1,7 @@
-import { useRef, useState } from 'react'
-import bell from '../assets/analyst/NotificationBell.svg'
-import shield from '../assets/analyst/ApprovedLinkedNodesShield.svg'
-import dashboard from '../assets/analyst/LayoutDashboard.svg'
-import scope from '../assets/analyst/ShieldCheck.svg'
-import document from '../assets/analyst/FileText.svg'
+import AnalystShell from './AnalystShell'
 import available from '../assets/analyst/Available.svg'
 import disabled from '../assets/analyst/Disabled.svg'
 import connectionProblem from '../assets/analyst/ConnectionProblem.svg'
-import './AnalystDashboard.css'
 
 const severities = ['Critical', 'High', 'Medium', 'Low', 'Informational'] as const
 
@@ -28,19 +22,14 @@ export type AnalystDashboardState =
 
 const toolStatusIcons = { Available: available, Disabled: disabled, 'Connection problem': connectionProblem }
 
-const navigation = [
-  ['Dashboard', dashboard], ['Assessments', scope], ['Scope & Targets', scope],
-  ['Testing', document], ['Findings', document], ['Report', document], ['Audit Log', document],
-]
-
 function UnavailableAction({ children }: { children: string }) {
   return <button type="button" className="analyst-link" disabled title="Unavailable in this release">{children}</button>
 }
 
 function CreateAssessment({ prominent = false }: { prominent?: boolean }) {
-  return <button type="button" className="analyst-create" disabled title="Assessment creation is unavailable in this release">
+  return <a className="analyst-create" href="/analyst/assessments/new">
     {prominent ? '+ Create Assessment' : 'Create Assessment'}
-  </button>
+  </a>
 }
 
 function Tools({ tools }: { tools: AnalystDashboardData['tools'] }) {
@@ -145,47 +134,11 @@ export default function AnalystDashboard({ state, signingOut, logoutFailed, onSi
   logoutFailed: boolean
   onSignOut: () => void
 }) {
-  const [accountOpen, setAccountOpen] = useState(false)
-  const accountButton = useRef<HTMLButtonElement>(null)
   const data = state.status === 'ready' ? state.data : undefined
   const populated = Boolean(data?.assessments.length)
   const name = data?.displayName ? `, ${data.displayName}` : ''
 
-  return <div className="analyst-shell">
-    <aside className="analyst-sidebar">
-      <div className="analyst-logo"><img src={shield} alt="" />UPTIP</div>
-      <nav aria-label="Analyst workspace">
-        {navigation.map(([label, icon], index) => index === 0
-          ? <a href="/analyst/dashboard" aria-current="page" key={label}><img src={icon} alt="" />{label}</a>
-          : <button type="button" key={label} disabled title="Unavailable in this release">
-            <img src={icon} alt="" />{label}{(index === 1 || index === 2) && <span aria-hidden="true">›</span>}
-          </button>)}
-      </nav>
-    </aside>
-    <div className="analyst-workspace">
-      <header className="analyst-topbar">
-        <span>ANTIC / UPTIP</span>
-        <div className="analyst-controls">
-          <button type="button" disabled aria-label="Notifications unavailable" title="Notifications unavailable"><img src={bell} alt="" /></button>
-          <div className="analyst-account" onKeyDown={event => {
-            if (event.key === 'Escape' && accountOpen) {
-              setAccountOpen(false)
-              accountButton.current?.focus()
-            }
-          }}>
-            <button ref={accountButton} type="button" className="analyst-avatar" aria-label="Account"
-              aria-expanded={accountOpen} aria-controls="analyst-account-panel" onClick={() => setAccountOpen(!accountOpen)}>
-              {data?.initials || 'SA'}
-            </button>
-            <div className="analyst-account-panel" id="analyst-account-panel" hidden={!accountOpen}>
-              {data?.displayName && <strong>{data.displayName}</strong>}
-              <small>Security Analyst</small>
-              <UnavailableAction>Account &amp; Security</UnavailableAction>
-              <button type="button" onClick={onSignOut} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign Out'}</button>
-            </div>
-          </div>
-        </div>
-      </header>
+  return <AnalystShell displayName={data?.displayName} initials={data?.initials} signingOut={signingOut} onSignOut={onSignOut}>
       <main className="analyst-content">
         <nav aria-label="Breadcrumb"><span aria-current="page">Dashboard</span></nav>
         <div className="analyst-heading">
@@ -202,6 +155,5 @@ export default function AnalystDashboard({ state, signingOut, logoutFailed, onSi
         </section>}
         {data && (populated ? <PopulatedDashboard data={data} /> : <EmptyDashboard data={data} />)}
       </main>
-    </div>
-  </div>
+  </AnalystShell>
 }

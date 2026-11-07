@@ -88,7 +88,7 @@ def session_status(request: Request, db: Session = Depends(get_db)):
         return reply(403, 'forbidden', 'Request could not be verified.')
     csrf = session_csrf(settings, request.cookies[settings.cookie_name])
     return AuthResponse(state='authenticated', message='Authentication complete.',
-                        role=user.role, csrf_token=csrf)
+                        role=user.role, username=user.username, user_id=user.id, csrf_token=csrf)
 
 
 @router.post('/logout', response_model=AuthResponse)

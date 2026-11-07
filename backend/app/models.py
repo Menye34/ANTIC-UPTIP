@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, Sequence, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -59,3 +59,41 @@ class PasswordChangeChallenge(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     environment: Mapped[str] = mapped_column(String(16))
+
+
+assessment_reference_sequence = Sequence('assessment_reference_sequence', metadata=Base.metadata)
+
+
+class Assessment(Base):
+    __tablename__ = 'assessments'
+    __table_args__ = (
+        UniqueConstraint('creator_id', 'idempotency_key', name='uq_assessments_creator_idempotency'),
+        CheckConstraint("status = 'Draft'", name='ck_assessments_draft'),
+        CheckConstraint('end_date >= start_date', name='ck_assessments_window'),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    reference: Mapped[str] = mapped_column(String(48), unique=True)
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    start_date: Mapped[date | None] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(16), default='Draft')
+    creator_id: Mapped[UUID] = mapped_column(ForeignKey('users.id'), index=True)
+    lead_analyst_id: Mapped[UUID] = mapped_column(ForeignKey('users.id'))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AssessmentAssignment(Base):
+    __tablename__ = 'assessment_assignments'
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id', ondelete='CASCADE'), primary_key=True)
+    analyst_id: Mapped[UUID] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), primary_key=True, index=True)
+
+
+class AssessmentCreationEvent(Base):
+    __tablename__ = 'assessment_creation_events'
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id'), primary_key=True)
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey('users.id'))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

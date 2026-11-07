@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import AnalystDashboard from './AnalystDashboard'
 import type { AnalystDashboardData, AnalystDashboardState } from './AnalystDashboard'
@@ -25,7 +25,7 @@ describe('Analyst dashboard presentation', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
     expect(screen.queryByText('Testing Results')).not.toBeInTheDocument()
     expect(screen.queryByText('Available', { exact: true })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Create Assessment' })).toBeDisabled()
+    expect(within(screen.getByRole('main')).getByRole('link', { name: 'Create Assessment' })).toHaveAttribute('href', '/analyst/assessments/new')
   })
 
   it('renders supplied assessment activity in the populated sections', () => {

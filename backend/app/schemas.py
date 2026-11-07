@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 WorkspaceRole = Literal['Security Analyst', 'Technical Administrator']
@@ -21,6 +22,8 @@ class AuthResponse(BaseModel):
     next_step_available: bool = False
     csrf_token: str | None = None
     role: str | None = None
+    username: str | None = None
+    user_id: UUID | None = None
     retry_after_seconds: int | None = None
 
 

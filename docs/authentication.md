@@ -201,8 +201,8 @@ analyst. Until that integration supplies verified data, the route displays
 
 The primary references are Figma frames `88:409` and `68:1229`. The second
 summary card uses the populated frame's **Total Findings** label. Account &
-Security, Notifications, Create Assessment, and assessment navigation remain
-visually present as unavailable controls pending their supported routes or services.
+Security, Notifications, and the remaining assessment modules stay unavailable
+pending their supported routes or services. Create Assessment opens the draft form.
 
 ### Automated checks
 
