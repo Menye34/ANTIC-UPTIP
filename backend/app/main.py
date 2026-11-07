@@ -18,6 +18,8 @@ def create_app():
     app.include_router(password_router)
     from .assessment_routes import router as assessment_router
     app.include_router(assessment_router)
+    from .scope_routes import router as scope_router
+    app.include_router(scope_router)
     app.add_middleware(BodyLimitMiddleware)
 
     @app.middleware('http')

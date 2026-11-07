@@ -12,7 +12,7 @@ const navigation = [
   ['Testing', document], ['Findings', document], ['Report', document], ['Audit Log', document],
 ]
 
-export default function AnalystShell({ children, displayName, initials, signingOut, onSignOut, sidebar = true, createActive = false }: {
+export default function AnalystShell({ children, displayName, initials, signingOut, onSignOut, sidebar = true, createActive = false, scopeOverview }: {
   children: ReactNode
   displayName?: string
   initials?: string
@@ -20,6 +20,7 @@ export default function AnalystShell({ children, displayName, initials, signingO
   onSignOut: () => void
   sidebar?: boolean
   createActive?: boolean
+  scopeOverview?: string
 }) {
   const [accountOpen, setAccountOpen] = useState(false)
   const accountButton = useRef<HTMLButtonElement>(null)
@@ -28,13 +29,20 @@ export default function AnalystShell({ children, displayName, initials, signingO
       <div className="analyst-logo"><img src={shield} alt="" />UPTIP</div>
       <nav aria-label="Analyst workspace">
         {navigation.map(([label, icon], index) => index === 0
-          ? <a href="/analyst/dashboard" aria-current={createActive ? undefined : "page"} key={label}><img src={icon} alt="" />{label}</a>
+          ? <a href="/analyst/dashboard" aria-current={createActive || scopeOverview ? undefined : "page"} key={label}><img src={icon} alt="" />{label}</a>
+          : scopeOverview && index === 1 ? <a href={scopeOverview} key={label}><img src={icon} alt="" />Assessment</a>
+          : scopeOverview && index === 2 ? <div className="analyst-assessment-nav" key={label}>
+            <details open><summary><img src={icon} alt="" />Setup</summary>
+              <a href={scopeOverview + '/scope'} aria-current="page">Authorized Scope</a>
+              <button type="button" disabled>Assessment Targets</button>
+            </details>
+          </div>
           : index === 1 ? <div className="analyst-assessment-nav" key={label}>
             <details open={createActive || undefined}><summary><img src={icon} alt="" />{label}</summary>
               <a href="/analyst/assessments/new" aria-current={createActive ? 'page' : undefined}>Create Assessment</a>
             </details>
           </div> : <button type="button" key={label} disabled title="Unavailable in this release">
-            <img src={icon} alt="" />{label}{index === 2 && <span aria-hidden="true">›</span>}
+            <img src={icon} alt="" />{scopeOverview && label === 'Report' ? 'Reports' : label}{index === 2 && <span aria-hidden="true">›</span>}
           </button>)}
       </nav>
     </aside>}

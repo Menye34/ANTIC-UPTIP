@@ -151,7 +151,7 @@ describe('Draft Assessment Overview', () => {
     expect(screen.getByText(assessment.description!)).toBeVisible()
     expect(screen.getByText('0 targets')).toBeVisible()
     expect(screen.getByText('No authorized scope defined')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Continue Setup' })).toBeDisabled()
+    expect(screen.getByRole('link', { name: 'Continue Setup' })).toHaveAttribute('href', '/analyst/assessments/' + assessment.id + '/scope')
     expect(screen.getByRole('status')).toHaveTextContent('Assessment created')
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss confirmation' }))
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
@@ -255,5 +255,111 @@ describe('Assessment account switches', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Assessment unavailable')
     await act(async () => finish(response(assessment)))
     expect(screen.queryByRole('heading', { name: assessment.name })).not.toBeInTheDocument()
+  })
+})
+
+describe('Authorized Scope', () => {
+  const path = draftPath + '/scope'
+  const entry = { id: 'scope-id', value: '192.168.10.0/24', kind: 'Subnet' }
+  const empty = { status: 'Draft', can_edit: true, revision: 0, entries: [] }
+
+  beforeEach(() => {
+    // jsdom lacks native dialog methods. The browser owns modal focus trapping.
+    Object.defineProperties(HTMLDialogElement.prototype, {
+      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true } },
+      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false } },
+    })
+  })
+
+  it('shows persisted entries, server duplicate feedback and the empty state after confirmed removal', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response(empty))
+      .mockResolvedValueOnce(response({ ...empty, revision: 1, entries: [entry], changed: entry }, 201))
+      .mockResolvedValueOnce(response({ code: 'duplicate_entry' }, 409))
+      .mockResolvedValueOnce(response({ ...empty, revision: 2, changed: entry }))
+    vi.stubGlobal('fetch', fetcher)
+    renderPage(path)
+    expect(await screen.findByText('No authorized scope entries yet')).toBeVisible()
+    const nav = screen.getByRole('navigation', { name: 'Analyst workspace' })
+    const setup = within(nav).getByText('Setup').closest('details')
+    expect(setup).toHaveAttribute('open')
+    expect(within(setup!).getByRole('link', { name: 'Authorized Scope' })).toHaveAttribute('aria-current', 'page')
+    expect(within(setup!).getByRole('button', { name: 'Assessment Targets' })).toBeDisabled()
+    expect(within(nav).getByRole('link', { name: 'Assessment' })).toHaveAttribute('href', draftPath)
+    expect(within(nav).getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('button', { name: 'Continue to Assessment Targets' })).toBeDisabled()
+    const input = screen.getByRole('textbox', { name: 'Scope entry' })
+    const add = screen.getByRole('button', { name: 'Add to Scope' })
+    fireEvent.click(add)
+    expect(input).toHaveAccessibleDescription('Enter a scope entry.')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    fireEvent.change(input, { target: { value: entry.value } })
+    fireEvent.click(add)
+    expect(await screen.findByText('Scope added')).toBeVisible()
+    expect(screen.getByRole('cell', { name: entry.value })).toBeVisible()
+    expect(fetcher.mock.calls[1][0]).toBe(api + '/' + assessment.id + '/scope')
+    expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ value: entry.value, revision: 0 })
+    fireEvent.change(input, { target: { value: entry.value } })
+    fireEvent.click(add)
+    expect(await screen.findByText('This scope entry already exists. Enter a different value.')).toBeVisible()
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    fireEvent.click(screen.getByRole('button', { name: /^Remove/ }))
+    expect(screen.getByRole('dialog')).toHaveAccessibleName('Remove authorized scope?')
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledTimes(3)
+    fireEvent.click(screen.getByRole('button', { name: /^Remove/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Removal' }))
+    expect(await screen.findByText('No authorized scope entries yet')).toBeVisible()
+    expect(JSON.parse(fetcher.mock.calls[3][1].body)).toEqual({ confirmed: true, revision: 1 })
+  })
+
+  it('prefills the edit field and reloads the authoritative list after a stale write', async () => {
+    const updated = { ...entry, value: '192.168.30.0/24' }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ ...empty, entries: [entry] }))
+      .mockResolvedValueOnce(response({ code: 'stale_revision' }, 409))
+      .mockResolvedValueOnce(response({ ...empty, revision: 1, entries: [updated] }))
+    vi.stubGlobal('fetch', fetcher)
+    renderPage(path)
+    fireEvent.click(await screen.findByRole('button', { name: /^Edit/ }))
+    const input = screen.getByRole('textbox', { name: 'Edit scope entry' })
+    expect(input).toHaveValue(entry.value)
+    expect(input).toHaveFocus()
+    fireEvent.change(input, { target: { value: '192.168.20.0/24' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Authorized scope changed.')
+    expect(fetcher.mock.calls[1][1].method).toBe('PATCH')
+    fireEvent.click(screen.getByRole('button', { name: 'Reload entries' }))
+    expect(await screen.findByRole('cell', { name: updated.value })).toBeVisible()
+  })
+
+  it('preserves a same-user view and ignores pending mutations after account switching', async () => {
+    window.history.replaceState(null, '', path)
+    let userId = analystId
+    let reads = 0
+    let finish!: (value: ReturnType<typeof response>) => void
+    vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.endsWith('/scope')) {
+        if (options?.method === 'POST') return new Promise(resolve => { finish = resolve })
+        reads += 1
+        return userId === analystId ? response(empty) : response({}, 404)
+      }
+      return response({ state: 'authenticated', role: 'Security Analyst', username: 'analyst',
+        user_id: userId, csrf_token: 'test-csrf' })
+    }))
+    render(<App />)
+    const field = await screen.findByRole('textbox', { name: 'Scope entry' })
+    fireEvent.change(field, { target: { value: entry.value } })
+    await act(async () => fireEvent.focus(window))
+    expect(reads).toBe(1)
+    expect(field).toHaveValue(entry.value)
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Scope' }))
+    userId = 'analyst-b-id'
+    await act(async () => fireEvent.focus(window))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load authorized scope')
+    await act(async () => finish(response({ ...empty, revision: 1, entries: [entry], changed: entry }, 201)))
+    expect(screen.queryByText(entry.value)).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Scope entry' })).not.toBeInTheDocument()
   })
 })

@@ -5,13 +5,13 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 
 from .config import get_settings
 from .database import get_db
-from .models import Assessment, AssessmentAssignment, AssessmentCreationEvent, User, assessment_reference_sequence
+from .models import Assessment, AssessmentAssignment, AssessmentCreationEvent, ScopeEntry, User, assessment_reference_sequence
 from .routes import require_role, trusted_origin
 from .security import digest, session_csrf
 
@@ -50,6 +50,7 @@ class AssessmentOverview(AssessmentSummary):
     lead_analyst: str
     created_by: str
     created_at: datetime
+    scope_entry_count: int = 0
 
 
 def accessible(user: User):
@@ -57,10 +58,10 @@ def accessible(user: User):
     return (Assessment.creator_id == user.id) | Assessment.id.in_(assigned)
 
 
-def overview(assessment, lead, actor, occurred_at):
+def overview(assessment, lead, actor, occurred_at, scope_entry_count=0):
     return AssessmentOverview(**AssessmentSummary.model_validate(assessment).model_dump(),
         description=assessment.description, start_date=assessment.start_date,
-        lead_analyst=lead, created_by=actor, created_at=occurred_at)
+        lead_analyst=lead, created_by=actor, created_at=occurred_at, scope_entry_count=scope_entry_count)
 
 
 @router.post('', status_code=201, response_model=AssessmentOverview)
@@ -118,7 +119,8 @@ def list_assessments(user: User = Depends(analyst), db: Session = Depends(get_db
 def get_assessment(assessment_id: UUID, user: User = Depends(analyst), db: Session = Depends(get_db)):
     lead = aliased(User)
     actor = aliased(User)
-    row = db.execute(select(Assessment, lead.username, actor.username, AssessmentCreationEvent.occurred_at)
+    count = select(func.count()).select_from(ScopeEntry).where(ScopeEntry.assessment_id == Assessment.id).scalar_subquery()
+    row = db.execute(select(Assessment, lead.username, actor.username, AssessmentCreationEvent.occurred_at, count)
         .join(lead, Assessment.lead_analyst_id == lead.id)
         .join(AssessmentCreationEvent, AssessmentCreationEvent.assessment_id == Assessment.id)
         .join(actor, AssessmentCreationEvent.actor_id == actor.id)

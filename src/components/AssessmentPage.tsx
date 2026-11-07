@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import AuthorizedScope from './AuthorizedScope'
 import AnalystShell from './AnalystShell'
 import { AssessmentRequestError, createAssessment, getAssessment } from '../services/assessments'
 import type { Assessment } from '../services/assessments'
@@ -186,11 +187,11 @@ function Overview({ path, showCreated, onExpired }: AssessmentPageProps) {
     </section>}
     <section className="assessment-setup">
       <div><h2>Assessment setup required</h2><p>Define the authorized scope and add your targets. The system classifies them and prepares the baseline automatically.</p></div>
-      <button className="analyst-create" type="button" disabled title="Scope and Target setup is unavailable in this release">Continue Setup</button>
+      <a className="analyst-create" href={`/analyst/assessments/${assessment.id}/scope`}>Continue Setup</a>
     </section>
     <div className="assessment-overview-columns">
       <div className="analyst-stack">
-        <section className="analyst-card"><h2>Authorized scope</h2><h3>No authorized scope defined</h3>
+        <section className="analyst-card"><h2>Authorized scope</h2><h3>{assessment.scope_entry_count ? `${assessment.scope_entry_count} authorized scope entries` : 'No authorized scope defined'}</h3>
           <p>Define the boundaries within which assessment activity is permitted.</p></section>
         <section className="analyst-card"><h2>Targets</h2><strong className="assessment-target-count">0 targets</strong>
           <p>No targets have been added yet.</p><small>Each target is classified and its baseline is prepared automatically.</small></section>
@@ -214,11 +215,12 @@ function Overview({ path, showCreated, onExpired }: AssessmentPageProps) {
 
 export default function AssessmentPage(props: AssessmentPageProps) {
   const create = props.path.endsWith('/new')
-  return <AnalystShell sidebar={create} createActive={create} displayName={props.username}
+  const scopeOverview = props.path.endsWith('/scope') ? props.path.slice(0, -6) : undefined
+  return <AnalystShell scopeOverview={scopeOverview} sidebar={create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
     initials={props.username.slice(0, 2).toUpperCase()} signingOut={props.signingOut} onSignOut={props.onSignOut}>
     <main className={create ? 'analyst-content' : 'analyst-content assessment-overview'}>
       {props.logoutFailed && <p role="alert">Unable to sign out. Please try again.</p>}
-      {create ? <CreateForm {...props} /> : <Overview {...props} />}
+      {create ? <CreateForm {...props} /> : scopeOverview ? <AuthorizedScope overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} /> : <Overview {...props} />}
     </main>
   </AnalystShell>
 }

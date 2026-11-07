@@ -12,6 +12,7 @@ export interface Assessment extends AssessmentDraft {
   lead_analyst: string
   created_by: string
   created_at: string
+  scope_entry_count?: number
 }
 
 export class AssessmentRequestError extends Error {

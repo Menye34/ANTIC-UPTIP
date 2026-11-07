@@ -30,7 +30,7 @@ function App() {
   }, [])
 
   if (path === '/first-login') return <FirstLogin onChanged={showLogin} onSessionEnded={showLogin} />
-  const assessmentPath = /^\/analyst\/assessments\/[^/]+$/.test(path) ? path : undefined
+  const assessmentPath = /^\/analyst\/assessments\/[^/]+(?:\/scope)?$/.test(path) ? path : undefined
   if (assessmentPath || path === '/analyst/dashboard' || path === '/admin/dashboard' || path === '/workspace') {
     return <Dashboard key={path} onSessionEnded={showLogin} assessmentPath={assessmentPath}
       createdBy={creation?.path === path ? creation.userId : undefined} navigate={navigate} />

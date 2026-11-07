@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, Sequence, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, Sequence, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -80,6 +80,7 @@ class Assessment(Base):
     start_date: Mapped[date | None] = mapped_column(Date)
     end_date: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(16), default='Draft')
+    scope_revision: Mapped[int] = mapped_column(Integer, server_default='0')
     creator_id: Mapped[UUID] = mapped_column(ForeignKey('users.id'), index=True)
     lead_analyst_id: Mapped[UUID] = mapped_column(ForeignKey('users.id'))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -96,4 +97,30 @@ class AssessmentCreationEvent(Base):
     __tablename__ = 'assessment_creation_events'
     assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id'), primary_key=True)
     actor_id: Mapped[UUID] = mapped_column(ForeignKey('users.id'))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ScopeEntry(Base):
+    __tablename__ = 'scope_entries'
+    __table_args__ = (
+        UniqueConstraint('assessment_id', 'normalized_value', name='uq_scope_entry_value'),
+        CheckConstraint("kind IN ('IP address', 'Subnet', 'Hostname', 'Web URL')", name='ck_scope_entry_kind'),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id', ondelete='CASCADE'))
+    normalized_value: Mapped[str] = mapped_column(String(1024))
+    kind: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ScopeEvent(Base):
+    __tablename__ = 'scope_events'
+    __table_args__ = (CheckConstraint("action IN ('added', 'edited', 'removed')", name='ck_scope_event_action'),)
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id'), primary_key=True)
+    revision: Mapped[int] = mapped_column(primary_key=True)
+    entry_id: Mapped[UUID]
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey('users.id'))
+    action: Mapped[str] = mapped_column(String(16))
+    before: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    after: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
