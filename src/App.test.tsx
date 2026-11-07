@@ -10,7 +10,7 @@ function reply(state: string, status = 200, role?: string) {
 }
 
 const roles = [
-  ['Security Analyst', '/analyst/dashboard', 'Security Analyst Dashboard', '/admin/dashboard'],
+  ['Security Analyst', '/analyst/dashboard', 'Dashboard', '/admin/dashboard'],
   ['Technical Administrator', '/admin/dashboard', 'Administrator Dashboard', '/analyst/dashboard'],
 ] as const
 
@@ -53,18 +53,19 @@ describe('Workspace session routing', () => {
     expect(await screen.findByRole('heading', { name: title })).toBeVisible()
   })
 
-  it('signs out after refresh using only the restored CSRF token', async () => {
-    window.history.replaceState(null, '', '/admin/dashboard')
+  it.each(roles)('signs out %s after refresh using the restored CSRF token', async (role, path) => {
+    window.history.replaceState(null, '', path)
     let authenticated = true
     const fetcher = vi.fn(async (url: string) => {
       if (url === '/api/v1/auth/logout') {
         authenticated = false
         return reply('unauthenticated')
       }
-      return authenticated ? reply('authenticated', 200, 'Technical Administrator') : reply('unauthenticated', 401)
+      return authenticated ? reply('authenticated', 200, role) : reply('unauthenticated', 401)
     })
     vi.stubGlobal('fetch', fetcher)
     render(<App />)
+    if (role === 'Security Analyst') fireEvent.click(await screen.findByRole('button', { name: 'Account' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sign Out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in to UPTIP' })).toBeVisible()
     expect(fetcher).toHaveBeenCalledWith('/api/v1/auth/logout', expect.objectContaining({
@@ -102,6 +103,6 @@ describe('Workspace session routing', () => {
     expect(window.location.pathname).toBe('/analyst/dashboard')
     expect(screen.queryByRole('heading')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Security Analyst Dashboard' })).toBeVisible())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeVisible())
   })
 })

@@ -185,6 +185,25 @@ have a session cookie, and GET `/api/v1/auth/session` must return 401. Completed
 login sets an HttpOnly cookie; the protected GET returns 200. Logout requires the
 CSRF token from the verified session response and the trusted Origin.
 
+### Analyst dashboard data integration
+
+`/analyst/dashboard` mounts the analyst shell after Phase A verifies the session.
+`AnalystDashboard` accepts a typed loading, unavailable, or ready state.
+Ready data with an empty assessment list selects the Empty layout. A ready list
+containing assessments selects the Populated layout. The presentation tests supply
+isolated fixtures for these states.
+
+The backend currently has authentication models and routes. Live assessment
+membership, counts, activity, attention items, and tool status require an
+approved dashboard data integration that derives access from the authenticated
+analyst. Until that integration supplies verified data, the route displays
+**Dashboard data unavailable**. Sign Out remains available in the account control.
+
+The primary references are Figma frames `88:409` and `68:1229`. The second
+summary card uses the populated frame's **Total Findings** label. Account &
+Security, Notifications, Create Assessment, and assessment navigation remain
+visually present as unavailable controls pending their supported routes or services.
+
 ### Automated checks
 
 ```bash

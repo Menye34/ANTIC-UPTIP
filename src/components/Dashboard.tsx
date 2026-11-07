@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { clearKnownSession, hasKnownSession, inspectSession, rememberSession, signOut } from '../services/auth'
 import type { AuthResult } from '../services/auth'
+import AnalystDashboard from './AnalystDashboard'
 import './Login.css'
 
 const analyst = {
@@ -92,6 +93,11 @@ export default function Dashboard({ onSessionEnded }: { onSessionEnded: (expired
   }
 
   const workspace = workspaceFor(session?.role)
+
+  if (session?.role === 'Security Analyst') {
+    return <AnalystDashboard state={{ status: 'unavailable' }} signingOut={signingOut}
+      logoutFailed={logoutFailed} onSignOut={() => void logout()} />
+  }
 
   return (
     <main className="login-page">

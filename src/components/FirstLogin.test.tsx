@@ -186,7 +186,7 @@ describe('First Login Figma states and restricted flow', () => {
     await user.type(screen.getByLabelText('Username'), 'temporary-test-user')
     await user.type(screen.getByLabelText('Password'), 'ReplacementPassword456!')
     await user.click(screen.getByRole('button', { name: 'Sign In' }))
-    expect(await screen.findByRole('heading', { name: 'Security Analyst Dashboard' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeVisible()
     expect(window.location.pathname).toBe('/analyst/dashboard')
     expect(fetcher.mock.calls.every(([url]) => ['/api/v1/auth/login', '/api/v1/auth/session',
       '/api/v1/auth/password/challenge', '/api/v1/auth/password/change'].includes(String(url)))).toBe(true)
