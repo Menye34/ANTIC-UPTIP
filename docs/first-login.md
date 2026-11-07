@@ -64,7 +64,7 @@ Success returns `password_changed`, not `authenticated`. No normal session is
 created. Cookies for the completed flow are cleared, the page clears sensitive
 state and returns to empty Login. The user must authenticate using the new
 password. Active accounts without a password-change requirement then receive a
-secure authenticated session. Workspace navigation remains unimplemented.
+secure authenticated session. A supported role opens its placeholder dashboard after session verification.
 
 Other response states reuse AuthResponse: password_mismatch (422),
 password_rejected (422), challenge_expired (401), forbidden (403), rate_limited
@@ -124,8 +124,8 @@ appears, independently test both eye controls, then enter a compliant password a
 a different confirmation. Blur confirmation to inspect the red Figma alert.
 Correct confirmation: the button enables. Submit and confirm return to Login with
 empty fields. The old password must fail; the new password must be accepted and
-then receive a secure authenticated session. Workspace navigation remains
-unimplemented; Login shows Authentication complete.
+then receive a secure authenticated session. A supported role opens its placeholder
+dashboard after session verification.
 Opening /first-login without a challenge must return to Login. A five-minute-old
 challenge must not replace a password, even if the form remains open.
 

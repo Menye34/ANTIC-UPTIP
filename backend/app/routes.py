@@ -1,15 +1,15 @@
 from datetime import datetime, timezone
 import hmac
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .database import get_db
 from .models import AuthSession, User
-from .schemas import AuthResponse, LoginRequest
-from .security import can_activate, digest
+from .schemas import AuthResponse, LoginRequest, WorkspaceRole
+from .security import can_activate, digest, session_csrf
 from .service import authenticate, audit
 
 router = APIRouter(prefix='/api/v1/auth')
@@ -59,6 +59,19 @@ def current_session(request, db):
     return session, user
 
 
+def require_role(role: WorkspaceRole):
+    """Apply to protected API handlers that require one exact workspace role."""
+    def authorize(request: Request, db: Session = Depends(get_db)) -> User:
+        _, user = current_session(request, db)
+        if user is None:
+            raise HTTPException(status_code=401)
+        if user.role != role:
+            raise HTTPException(status_code=403)
+        return user
+
+    return authorize
+
+
 @router.get('/session', response_model=AuthResponse)
 def session_status(request: Request, db: Session = Depends(get_db)):
     session, user = current_session(request, db)
@@ -69,7 +82,13 @@ def session_status(request: Request, db: Session = Depends(get_db)):
                                    httponly=True, samesite='strict')
             return response
         return reply(401, 'unauthenticated', 'Authentication required.')
-    return AuthResponse(state='authenticated', message='Authentication complete.')
+    settings = get_settings()
+    origin = request.headers.get('origin')
+    if origin is not None and not trusted_origin(request):
+        return reply(403, 'forbidden', 'Request could not be verified.')
+    csrf = session_csrf(settings, request.cookies[settings.cookie_name])
+    return AuthResponse(state='authenticated', message='Authentication complete.',
+                        role=user.role, csrf_token=csrf)
 
 
 @router.post('/logout', response_model=AuthResponse)
@@ -78,7 +97,14 @@ def logout(request: Request, db: Session = Depends(get_db)):
     if not user:
         return reply(401, 'unauthenticated', 'Authentication required.')
     supplied = request.headers.get('x-csrf-token', '')
-    if not trusted_origin(request) or not hmac.compare_digest(session.csrf_hash, digest(supplied)):
+    if not trusted_origin(request):
+        return reply(403, 'forbidden', 'Request could not be verified.')
+    settings = get_settings()
+    restored = session_csrf(settings, request.cookies[settings.cookie_name])
+    # Existing sessions may still have a randomly issued CSRF token.
+    supplied_hash = digest(supplied)
+    if not (hmac.compare_digest(session.csrf_hash, supplied_hash)
+            or hmac.compare_digest(digest(restored), supplied_hash)):
         return reply(403, 'forbidden', 'Request could not be verified.')
     db.delete(session)
     audit(db, 'logout', '0' * 64, user)

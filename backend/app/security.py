@@ -17,6 +17,11 @@ def client_key(secret: str, value: str) -> str:
     return hmac.new(secret.encode(), value.encode(), hashlib.sha256).hexdigest()
 
 
+def session_csrf(settings, token: str) -> str:
+    # Domain-separated from rate limiting and password-change challenges.
+    return client_key(settings.rate_key, 'session-csrf:' + token)
+
+
 def verify_password(password: str, encoded: str) -> bool:
     try:
         return hasher.verify(encoded, password)

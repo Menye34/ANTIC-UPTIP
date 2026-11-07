@@ -7,12 +7,9 @@ export interface AuthResult {
   message: string
   next_step_available: boolean
   csrf_token: string | null
+  role?: string | null
   retry_after_seconds?: number | null
 }
-
-// Held only in memory for future cookie-authenticated mutations; never persisted.
-let csrfToken: string | null = null
-export function getCsrfToken() { return csrfToken }
 
 export async function signIn(username: string, password: string): Promise<AuthResult> {
   const response = await fetch('/api/v1/auth/login', {
@@ -28,7 +25,6 @@ export async function signIn(username: string, password: string): Promise<AuthRe
   if (!states.includes(result.state) || (!response.ok && result.state === 'authenticated')) {
     throw new Error('Invalid authentication response')
   }
-  csrfToken = result.state === 'authenticated' ? result.csrf_token : null
   return result
 }
 
@@ -55,7 +51,6 @@ export function hasKnownSession() {
 }
 export function clearKnownSession() {
   knownSession = false
-  csrfToken = null
   try { sessionStorage.removeItem(SESSION_HINT) } catch { /* No stored secrets to clear. */ }
 }
 export async function inspectSession(signal: AbortSignal): Promise<AuthResult> {
@@ -67,4 +62,16 @@ export async function inspectSession(signal: AbortSignal): Promise<AuthResult> {
   if ((response.ok && result.state === 'authenticated') ||
       (response.status === 401 && ['unauthenticated', 'session_expired'].includes(result.state))) return result
   throw new Error('Session inspection unavailable')
+}
+
+export async function signOut(csrfToken: string): Promise<void> {
+  const response = await fetch('/api/v1/auth/logout', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'X-CSRF-Token': csrfToken },
+    signal: AbortSignal.timeout(10000),
+  })
+  const result: AuthResult = await response.json()
+  if ((response.ok || response.status === 401) && result.state === 'unauthenticated') return
+  throw new Error('Sign out unavailable')
 }

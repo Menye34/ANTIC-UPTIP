@@ -1,17 +1,33 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Login from './components/Login'
 import FirstLogin from './components/FirstLogin'
+import Dashboard from './components/Dashboard'
 
 function App() {
-  const [step, setStep] = useState<'login' | 'first-login'>(() => window.location.pathname === '/first-login' ? 'first-login' : 'login')
-  function showLogin() {
+  const [path, setPath] = useState(() => window.location.pathname)
+  const [sessionEnded, setSessionEnded] = useState(false)
+  const showLogin = useCallback((expired = false) => {
     window.history.replaceState(null, '', '/')
-    setStep('login')
+    setSessionEnded(expired)
+    setPath('/')
+  }, [])
+  const showWorkspace = useCallback(() => setPath('/workspace'), [])
+  useEffect(() => {
+    function onPopState() {
+      setSessionEnded(false)
+      setPath(window.location.pathname)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  if (path === '/first-login') return <FirstLogin onChanged={showLogin} onSessionEnded={showLogin} />
+  if (path === '/analyst/dashboard' || path === '/admin/dashboard' || path === '/workspace') {
+    return <Dashboard key={path} onSessionEnded={showLogin} />
   }
-  if (step === 'first-login') return <FirstLogin onChanged={showLogin} onSessionEnded={showLogin} />
-  return <Login onPasswordChangeRequired={() => {
+  return <Login sessionEnded={sessionEnded} onAuthenticated={showWorkspace} onPasswordChangeRequired={() => {
     window.history.replaceState(null, '', '/first-login')
-    setStep('first-login')
+    setPath('/first-login')
   }} />
 }
 

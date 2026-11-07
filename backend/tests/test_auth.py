@@ -221,3 +221,59 @@ def test_authenticated_session_keeps_server_assigned_role(client, user, db):
 def test_removed_endpoints_are_not_registered(client):
     assert client.post('/api/v1/auth/mfa/verify', json={'code': '123456'}).status_code == 404
     assert client.get('/api/v1/auth/mfa/challenge').status_code == 404
+
+
+@pytest.mark.parametrize('role', ['Security Analyst', 'Technical Administrator'])
+def test_workspace_role_is_server_assigned_on_login_and_refresh(client, user, db, role):
+    from app.models import Role
+    db.add(Role(name=role))
+    db.flush()
+    user.role = role
+    db.commit()
+
+    denied = login(client, password='wrong')
+    assert denied.status_code == 401 and denied.json().get('role') is None
+    signed_in = login(client)
+    assert signed_in.json()['role'] == role
+    refreshed = client.get('/api/v1/auth/session')
+    assert refreshed.json()['role'] == role
+    assert refreshed.headers['cache-control'] == 'no-store'
+    assert client.get('/api/v1/auth/session', headers={'Origin': 'https://other.test'}).status_code == 403
+    assert client.post('/api/v1/auth/logout', headers={'X-CSRF-Token': refreshed.json()['csrf_token']}).status_code == 200
+
+
+def test_refresh_restores_csrf_for_sessions_issued_before_role_routing(client, user, db):
+    login(client)
+    token = client.cookies.get('__Host-uptip_session')
+    session = db.get(AuthSession, digest(token))
+    session.csrf_hash = digest('old-random-csrf-fixture')
+    db.commit()
+    refreshed = client.get('/api/v1/auth/session')
+    csrf = refreshed.json()['csrf_token']
+    assert csrf and digest(csrf) != session.csrf_hash
+    assert client.post('/api/v1/auth/logout', headers={'X-CSRF-Token': csrf}).status_code == 200
+
+
+@pytest.mark.parametrize('role', ['Security Analyst', 'Technical Administrator', 'test-fixture-role'])
+def test_require_role_enforces_exact_permissions(client, user, db, role):
+    from fastapi import Depends
+    from app.models import Role
+    from app.routes import require_role
+
+    @client.app.get('/test/analyst')
+    def analyst_only(principal=Depends(require_role('Security Analyst'))):
+        return {'role': principal.role}
+
+    @client.app.get('/test/admin')
+    def admin_only(principal=Depends(require_role('Technical Administrator'))):
+        return {'role': principal.role}
+
+    assert client.get('/test/analyst').status_code == 401
+    if role != user.role:
+        db.add(Role(name=role))
+        db.flush()
+        user.role = role
+        db.commit()
+    assert login(client).status_code == 200
+    assert client.get('/test/analyst').status_code == (200 if role == 'Security Analyst' else 403)
+    assert client.get('/test/admin').status_code == (200 if role == 'Technical Administrator' else 403)

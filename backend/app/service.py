@@ -6,7 +6,7 @@ from sqlalchemy import case, select
 from sqlalchemy.dialects.postgresql import insert
 
 from .models import AuthEvent, AuthSession, LoginBucket, User
-from .security import DUMMY_HASH, can_activate, client_key, digest, hasher, verify_password
+from .security import DUMMY_HASH, can_activate, client_key, digest, hasher, session_csrf, verify_password
 
 INVALID = 'Unable to sign in. Check your credentials and try again.'
 
@@ -64,8 +64,9 @@ def authenticate(db, settings, username, password, ip, old_token=None):
         previous = db.get(AuthSession, digest(old_token))
         if previous:
             db.delete(previous)
-    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    token = secrets.token_urlsafe(32)
+    csrf = session_csrf(settings, token)
     db.add(AuthSession(token_hash=digest(token), csrf_hash=digest(csrf), user_id=user.id,
                        expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.session_seconds)))
     db.commit()
-    return 200, {'state': state, 'message': 'Authentication complete.', 'csrf_token': csrf}, token
+    return 200, {'state': state, 'message': 'Authentication complete.', 'csrf_token': csrf, 'role': user.role}, token

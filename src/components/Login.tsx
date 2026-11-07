@@ -12,13 +12,17 @@ type Notice = { message: string; tone: 'error' | 'info'; dismissOnEdit?: boolean
 const SESSION_ENDED = 'Your session has ended. Sign in again to continue.'
 
 /** Authentication Login scenarios: actual Figma frames, without review wrappers. */
-export default function Login({ onPasswordChangeRequired }: { onPasswordChangeRequired?: () => void }) {
+export default function Login({ onPasswordChangeRequired, onAuthenticated, sessionEnded = false }: {
+  onPasswordChangeRequired?: () => void
+  onAuthenticated?: () => void
+  sessionEnded?: boolean
+}) {
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [capsLock, setCapsLock] = useState(false)
   const [pending, setPending] = useState(false)
-  const [notice, setNotice] = useState<Notice | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(sessionEnded ? { message: SESSION_ENDED, tone: 'info', dismissOnEdit: true } : null)
   const inFlight = useRef(false)
   const generation = useRef(0)
   const ready = username.trim().length > 0 && password.length > 0
@@ -36,6 +40,7 @@ export default function Login({ onPasswordChangeRequired }: { onPasswordChangeRe
         if (controller.signal.aborted || inFlight.current || version !== generation.current) return
         if (result.state === 'authenticated') {
           rememberSession()
+          onAuthenticated?.()
         } else if (result.state === 'session_expired' || (result.state === 'unauthenticated' && previouslyAuthenticated)) {
           clearKnownSession()
           setUsername('')
@@ -61,7 +66,7 @@ export default function Login({ onPasswordChangeRequired }: { onPasswordChangeRe
       window.removeEventListener('focus', onVisible)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [])
+  }, [onAuthenticated])
 
   function detectCapsLock(event: KeyboardEvent<HTMLInputElement>) {
     setCapsLock(event.getModifierState('CapsLock'))
@@ -94,8 +99,10 @@ export default function Login({ onPasswordChangeRequired }: { onPasswordChangeRe
         dismissOnEdit: error || result.state === 'account_unavailable' })
       // Figma retains both values for invalid credentials; unavailable clears only password.
       if (result.state !== 'invalid_credentials') setPassword('')
-      if (result.state === 'authenticated') rememberSession()
-      // Workspace navigation is not implemented in this branch.
+      if (result.state === 'authenticated') {
+        rememberSession()
+        onAuthenticated?.()
+      }
     } catch {
       if (version !== generation.current) return
       setNotice({ message: 'Unable to reach the sign-in service. Please try again.', tone: 'info' })

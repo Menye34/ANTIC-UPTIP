@@ -5,7 +5,7 @@ Python FastAPI, SQLAlchemy, PostgreSQL and Alembic in `backend/`.
 
 The first screen remains the approved Login Default (Figma `44:2587`). Login now
 calls the real username/password authentication API and opens First Login when
-temporary-password replacement is required. Dashboard navigation is not implemented.
+temporary-password replacement is required. A verified session opens the placeholder dashboard for the assigned role.
 
 See [Authentication setup and security contract](docs/authentication.md) for Kali
 Linux setup, account provisioning, API states, tests and deployment requirements.

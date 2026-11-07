@@ -81,7 +81,8 @@ accounts. Provisioning does not implement production account administration.
 ## API and state contract
 
 All authentication responses have `state`, `message`, `next_step_available`
-(default false), and `csrf_token` (also returned for a restricted password-change challenge). Login accepts
+(default false), and `csrf_token` (also returned for a restricted password-change challenge).
+Successful Login and session verification return the assigned `role`. Login accepts
 only JSON `{ "username": "...", "password": "..." }`. Username is case-sensitive,
 1–128 ASCII letters/digits/`._@-`, starts alphanumeric; passwords are 1–1024
 characters and are never trimmed. Additional JSON keys are rejected. Request
@@ -90,7 +91,7 @@ bodies over 8192 bytes are rejected before JSON parsing, including chunked bodie
 | Endpoint | Behavior |
 | --- | --- |
 | `POST /api/v1/auth/login` | Validate credentials and gates; exact trusted Origin required. |
-| `GET /api/v1/auth/session` | Protected session check. No token or account details returned. |
+| `GET /api/v1/auth/session` | Verify the session and return its assigned role and logout CSRF token. |
 | `POST /api/v1/auth/logout` | Revoke session; trusted Origin and `X-CSRF-Token` required. |
 
 | State | HTTP | Implemented behavior |
@@ -114,10 +115,10 @@ authenticated session and grants no protected access.
 
 - Argon2id password hashes; missing users use a dummy Argon2id verification.
   Hashes are upgraded after valid verification when parameters change.
-- Independent cryptographically random 256-bit session/CSRF tokens; only SHA-256
-  digests stored server-side. Tokens are never stored in localStorage. Frontend
-  retains the CSRF token only in memory; refresh requires signing in again for a
-  subsequent mutation until a dedicated CSRF refresh interface is implemented.
+- Session tokens contain 256 bits of randomness and are stored as SHA-256 digests.
+  Login and session verification derive a separate CSRF token from the validated
+  cookie using a domain-separated HMAC. The frontend keeps it in memory. Logout
+  checks the trusted Origin and token, including tokens issued before Phase A.
 - Production cookie: `__Host-uptip_session`, Secure, HttpOnly, SameSite=Strict,
   Path=/, no Domain; default 30-minute absolute expiry. New login revokes the
   previous cookie's session. Other devices retain their sessions until expiry or
@@ -159,15 +160,30 @@ same-origin credentials, a 15-second timeout and an immediate in-flight guard.
 The button displays `Signing in...`; repeated submits are blocked. Password input
 is retained for invalid credentials and network retry, and cleared for account
 unavailability or other completed responses. Errors and pending states use the Figma alert above the fields; the card expands
-only when a response message is present. No dashboard
-navigation occurs, even on completed authentication.
+only when a response message is present. Successful login verifies the session
+before opening the assigned workspace.
+
+| Role | Workspace route |
+| --- | --- |
+| Security Analyst | `/analyst/dashboard` |
+| Technical Administrator | `/admin/dashboard` |
+
+Direct navigation and refresh verify the cookie before showing the workspace.
+An opposite-role URL redirects to the assigned workspace. An unrecognized role
+gets an access message and Sign Out. Expired or missing sessions return to Login,
+and verification failures show a retry state.
+
+Use `Depends(require_role('Security Analyst'))` or the equivalent administrator
+dependency from `app.routes` on future role-specific API handlers. It resolves the
+current user from the session and returns 401 for an invalid session or 403 for a
+role mismatch. Phase A provides workspace placeholders and the dependency.
 
 To verify communication, inspect the browser Network tab for the login POST and
 its structured state; never share credential-bearing request captures. Missing
 backend produces the retryable network/service error. Pending accounts must not
 have a session cookie, and GET `/api/v1/auth/session` must return 401. Completed
 login sets an HttpOnly cookie; the protected GET returns 200. Logout requires the
-CSRF token from the completed login response and the original Origin.
+CSRF token from the verified session response and the trusted Origin.
 
 ### Automated checks
 
@@ -264,8 +280,8 @@ No new configuration variable is required.
    retain credentials and restore the button. Resume backend service and retry.
 
 Temporary-password accounts open First Login, replace their password and return
-to Login. Dashboard/workspace navigation remains unimplemented in this branch. Local automated tests check the
-actual CSS color rules in jsdom and the DOM/API contracts, not a pixel screenshot.
+to Login. After a fresh sign-in, a supported role opens its placeholder dashboard.
+Local frontend tests check DOM and API behavior in jsdom.
 
 ## Permanent MFA removal: migration 0004
 
@@ -274,9 +290,7 @@ users with a replaced password receive the existing secure session immediately.
 First Login still requires a verified temporary password, restricted challenge,
 password replacement and a fresh Login. Login/First Login layouts are unchanged.
 Roles remain server-assigned records; the client cannot select a role on Login.
-This branch has no workspace router or role-specific resource endpoints yet, so
-workspace navigation and a complete resource-authorization policy remain pending.
-No new workspace, role catalogue or authorization bypass was introduced.
+Phase A uses the existing role column for workspace navigation and API role checks.
 
 0001–0003 are unchanged. Revision 0004 follows 0003 and drops the session-to-MFA
 foreign key and column, then mfa_challenges and mfa_credentials, then the three

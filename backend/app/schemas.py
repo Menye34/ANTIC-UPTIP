@@ -1,6 +1,8 @@
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+WorkspaceRole = Literal['Security Analyst', 'Technical Administrator']
+
 State = Literal['invalid_credentials', 'account_unavailable', 'password_change_required',
                 'authenticated',
                 'rate_limited', 'unavailable', 'invalid_request', 'forbidden', 'unauthenticated', 'session_expired',
@@ -18,6 +20,7 @@ class AuthResponse(BaseModel):
     message: str
     next_step_available: bool = False
     csrf_token: str | None = None
+    role: str | None = None
     retry_after_seconds: int | None = None
 
 
