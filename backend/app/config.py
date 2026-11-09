@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     rate_window_seconds: int = Field(default=900, ge=1)
     ip_limit: int = Field(default=30, ge=1)
     username_limit: int = Field(default=10, ge=1)
+    start_review_key: SecretStr | None = None
     rate_key: str = Field(min_length=32, repr=False)
 
     @model_validator(mode='after')

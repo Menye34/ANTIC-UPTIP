@@ -68,7 +68,7 @@ class Assessment(Base):
     __tablename__ = 'assessments'
     __table_args__ = (
         UniqueConstraint('creator_id', 'idempotency_key', name='uq_assessments_creator_idempotency'),
-        CheckConstraint("status = 'Draft'", name='ck_assessments_draft'),
+        CheckConstraint("status IN ('Draft', 'Ready')", name='ck_assessments_start_state'),
         CheckConstraint('end_date >= start_date', name='ck_assessments_window'),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -177,3 +177,30 @@ class BaselineAssignment(Base):
     target_id: Mapped[UUID] = mapped_column(ForeignKey('assessment_targets.id', ondelete='CASCADE'), primary_key=True)
     profile_key: Mapped[str] = mapped_column(String(80), primary_key=True)
     evaluation_id: Mapped[UUID] = mapped_column(ForeignKey('baseline_evaluations.id'), unique=True)
+
+
+class AssessmentStartAuthorization(Base):
+    __tablename__ = 'assessment_start_authorizations'
+    __table_args__ = (
+        UniqueConstraint('assessment_id', 'actor_id', 'idempotency_key', name='uq_start_actor_key'),
+        CheckConstraint("mode IN ('full', 'partial')", name='ck_start_mode'),
+        CheckConstraint('snapshot_version > 0', name='ck_start_snapshot_version'),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id'), unique=True)
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey('users.id'))
+    idempotency_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    mode: Mapped[str] = mapped_column(String(7))
+    snapshot_version: Mapped[int]
+    snapshot_digest: Mapped[str] = mapped_column(String(64))
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AssessmentStartEvent(Base):
+    __tablename__ = 'assessment_start_events'
+    authorization_id: Mapped[UUID] = mapped_column(ForeignKey('assessment_start_authorizations.id'), primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    from_status: Mapped[str] = mapped_column(String(16))
+    to_status: Mapped[str] = mapped_column(String(16))

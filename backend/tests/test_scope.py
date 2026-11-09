@@ -92,10 +92,9 @@ def test_scope_access_and_write_controls(client, db, user):
     db.commit()
     assert client.get(path).json()['can_edit'] is False
     assert client.post(path, json=payload, headers=headers).status_code == 403
-    # The current schema only permits Draft, so model a future state in a disposable transaction.
+    # Ready assessments cannot edit authorized scope.
     headers = sign_in(client, owner.username)
-    db.execute(text('ALTER TABLE assessments DROP CONSTRAINT ck_assessments_draft'))
-    db.execute(text("UPDATE assessments SET status = 'Active' WHERE id = :id"), {'id': assessment})
+    db.execute(text("UPDATE assessments SET status = 'Ready' WHERE id = :id"), {'id': assessment})
     assert client.post(path, json=payload, headers=headers).status_code == 403
     db.rollback()
 

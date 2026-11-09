@@ -1,19 +1,24 @@
 from datetime import date, datetime, timezone
 import hmac
 import re
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 
+from .assessment_readiness import evaluate_readiness
+from .assessment_start import signing_key, snapshot_for, start_review, verify_review_token
+from .baseline_catalog import fingerprint
 from .config import get_settings
 from .database import get_db
-from .models import Assessment, AssessmentAssignment, AssessmentCreationEvent, AssessmentTarget, ScopeEntry, User, assessment_reference_sequence
+from .models import Assessment, AssessmentAssignment, AssessmentCreationEvent, AssessmentStartAuthorization, AssessmentStartEvent, AssessmentTarget, AuthSession, ScopeEntry, User, assessment_reference_sequence
 from .routes import require_role, trusted_origin
-from .security import digest, session_csrf
+from .security import can_activate, digest, session_csrf
 
 router = APIRouter(prefix='/api/v1/assessments')
 analyst = require_role('Security Analyst')
@@ -131,3 +136,140 @@ def get_assessment(assessment_id: UUID, user: User = Depends(analyst), db: Sessi
     if row is None:
         raise HTTPException(status_code=404)
     return overview(*row)
+
+
+@router.get('/{assessment_id}/readiness')
+def get_readiness(assessment_id: UUID, request: Request, response: Response,
+                  user: User = Depends(analyst), db: Session = Depends(get_db)):
+    # Scope, target and baseline writers serialize on this same assessment row.
+    assessment = db.scalar(select(Assessment).where(
+        Assessment.id == assessment_id, accessible(user)).with_for_update(read=True))
+    if assessment is None:
+        raise HTTPException(status_code=404)
+    response.headers['Cache-Control'] = 'no-store'
+    readiness = evaluate_readiness(db, assessment)
+    settings = get_settings()
+    review = start_review(snapshot_for(readiness), signing_key(settings), user.id,
+                          request.cookies.get(settings.cookie_name), creator=assessment.creator_id == user.id)
+    eligible = {(item['target_id'], item['profile_id']) for item in review['eligible_activities']}
+    for target in readiness['targets']:
+        for activity in target['baseline_activities']:
+            pair = (str(target['target_id']), activity['profile_id'])
+            activity['start_review_eligible'] = review['confirmation_possible'] and pair in eligible
+        target['start_review_eligible'] = any(item['start_review_eligible'] for item in target['baseline_activities'])
+    return {**readiness, 'start_review_eligible': review['confirmation_possible'], 'start_review': review}
+
+class StartConfirmation(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    review_token: str = Field(min_length=1, max_length=4096)
+    mode: Literal['full', 'partial']
+    confirmed: Literal[True]
+
+    @field_validator('confirmed', mode='before')
+    @classmethod
+    def explicit_confirmation(cls, value):
+        if value is not True:
+            raise ValueError('Explicit Start confirmation is required.')
+        return value
+
+
+def start_conflict(code):
+    return JSONResponse(status_code=409, content={'detail': {'code': code}},
+                        headers={'Cache-Control': 'no-store'})
+
+
+def start_receipt(record):
+    return {
+        'authorization_id': record.id, 'assessment_id': record.assessment_id,
+        'lifecycle_status': 'Ready', 'mode': record.mode, 'confirmed_at': record.confirmed_at.astimezone(timezone.utc),
+        'snapshot_digest': record.snapshot_digest, 'execution_authorized': False,
+        'authorized_activity_count': len(record.snapshot['eligible_activities']),
+        'authorized_target_count': len({item['target_id'] for item in record.snapshot['eligible_activities']}),
+        'excluded_activity_count': len(record.snapshot['excluded_activities']),
+        'excluded_target_count': len(record.snapshot['excluded_targets']),
+    }
+
+
+@router.post('/{assessment_id}/start', status_code=201)
+def confirm_start(assessment_id: UUID, body: StartConfirmation, request: Request, response: Response,
+                  idempotency_key: UUID = Header(alias='Idempotency-Key'),
+                  user: User = Depends(analyst), db: Session = Depends(get_db)):
+    settings = get_settings()
+    session_token = request.cookies[settings.cookie_name]
+    supplied = request.headers.get('x-csrf-token', '').encode()
+    if not trusted_origin(request) or not hmac.compare_digest(supplied, session_csrf(settings, session_token).encode()):
+        raise HTTPException(403)
+    response.headers['Cache-Control'] = 'no-store'
+    # Authentication writers lock the user first. Hold the user and session
+    # stable through confirmation, including when a request waited on a lock.
+    actor = db.scalar(select(User).where(User.id == user.id).with_for_update(read=True)
+                      .execution_options(populate_existing=True))
+    session = db.scalar(select(AuthSession).where(AuthSession.token_hash == digest(session_token))
+                        .with_for_update(read=True).execution_options(populate_existing=True))
+    if (actor is None or session is None or session.user_id != user.id
+            or session.expires_at <= datetime.now(timezone.utc) or not can_activate(actor)):
+        raise HTTPException(401)
+    if actor.role != 'Security Analyst':
+        raise HTTPException(403)
+    assessment = db.scalar(select(Assessment).where(Assessment.id == assessment_id, accessible(user))
+                           .with_for_update().execution_options(populate_existing=True))
+    if assessment is None:
+        raise HTTPException(404)
+    if assessment.creator_id != user.id:
+        raise HTTPException(403)
+
+    request_fingerprint = fingerprint({'confirmation': body.model_dump(), 'session': digest(session_token)})
+    previous = db.scalar(select(AssessmentStartAuthorization)
+                         .where(AssessmentStartAuthorization.assessment_id == assessment_id))
+    if previous is not None and previous.idempotency_key == idempotency_key:
+        if previous.actor_id != user.id or not hmac.compare_digest(previous.request_fingerprint, request_fingerprint):
+            return start_conflict('start_idempotency_conflict')
+        receipt = start_receipt(previous)
+        db.commit()
+        response.status_code = 200
+        return receipt
+    if assessment.status != 'Draft' or previous is not None:
+        return start_conflict('start_lifecycle_conflict')
+
+    key = signing_key(settings)
+    if not key:
+        return start_conflict('start_signing_unavailable')
+    claims = verify_review_token(body.review_token, key, session_token, assessment_id, user.id, body.mode)
+    if claims is None:
+        return start_conflict('start_review_invalid')
+    expiry = datetime.fromisoformat(claims['expires_at'])
+    if expiry <= datetime.now(timezone.utc):
+        return start_conflict('start_review_expired')
+
+    # Covers existing rows and first-time tool insertion. The maintenance
+    # command commits its tool write before it takes any assessment locks.
+    db.execute(text('LOCK TABLE baseline_tool_states IN SHARE MODE'))
+    snapshot = snapshot_for(evaluate_readiness(db, assessment))
+    if not snapshot['mode']:
+        return start_conflict('start_no_eligible_activities')
+    snapshot_digest = fingerprint(snapshot)
+    if snapshot['mode'] != body.mode or not hmac.compare_digest(snapshot_digest, claims['digest']):
+        return start_conflict('start_review_stale')
+    now = datetime.now(timezone.utc)
+    if expiry <= now:
+        return start_conflict('start_review_expired')
+    if session.expires_at <= now:
+        raise HTTPException(401)
+
+    record = AssessmentStartAuthorization(
+        id=uuid4(), assessment_id=assessment_id, actor_id=user.id, idempotency_key=idempotency_key,
+        request_fingerprint=request_fingerprint, mode=body.mode, snapshot_version=snapshot['schema_version'],
+        snapshot_digest=snapshot_digest, snapshot=snapshot, confirmed_at=now,
+    )
+    try:
+        db.add(record)
+        db.flush()
+        db.add(AssessmentStartEvent(authorization_id=record.id, occurred_at=now,
+                                    from_status='Draft', to_status='Ready'))
+        assessment.status = 'Ready'
+        receipt = start_receipt(record)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+    return receipt

@@ -7,6 +7,8 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,26 +24,52 @@ def database_url():
 
 @pytest.fixture(scope='session')
 def engine(database_url):
-    # Refuse destructive test reset against a database without an explicit test name.
-    from sqlalchemy.engine import make_url
-    assert 'test' in (make_url(database_url).database or '')
-    os.environ.update(UPTIP_DATABASE_URL=database_url, UPTIP_ENVIRONMENT='test',
-                      UPTIP_PUBLIC_ORIGIN='https://testserver', UPTIP_COOKIE_SECURE='true',
-                      UPTIP_RATE_KEY='test-only-not-a-deployment-secret-123456')
-    from app.config import get_settings
-    get_settings.cache_clear()
-    config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
-    command.downgrade(config, 'base')
-    command.upgrade(config, 'head')
-    engine = create_engine(database_url)
-    yield engine
-    engine.dispose()
+    # Require both an exact local destination and explicit opt-in on the database itself.
+    try:
+        url = make_url(database_url)
+    except (SQLAlchemyError, ValueError):
+        pytest.fail('Invalid UPTIP_TEST_DATABASE_URL.', pytrace=False)
+    if (url.drivername != 'postgresql+psycopg' or url.database != 'uptip_test'
+            or url.host not in {'127.0.0.1', '::1'} or url.query):
+        pytest.fail('Use a local PostgreSQL database named uptip_test with no URL query options.',
+                    pytrace=False)
+
+    engine = create_engine(url, hide_parameters=True)
+    try:
+        try:
+            with engine.connect() as connection:
+                identity = connection.execute(text("""
+                    SELECT current_database(), shobj_description(oid, 'pg_database')
+                    FROM pg_database
+                    WHERE datname = current_database()
+                """)).one_or_none()
+        except SQLAlchemyError:
+            pytest.fail('Could not verify the disposable PostgreSQL test database.', pytrace=False)
+        if identity != ('uptip_test', 'UPTIP disposable test database'):
+            pytest.fail(
+                "After creating a dedicated disposable database, run "
+                "COMMENT ON DATABASE uptip_test IS 'UPTIP disposable test database';",
+                pytrace=False,
+            )
+
+        os.environ.update(UPTIP_DATABASE_URL=database_url, UPTIP_ENVIRONMENT='test',
+                          UPTIP_PUBLIC_ORIGIN='https://testserver', UPTIP_COOKIE_SECURE='true',
+                          UPTIP_RATE_KEY='test-only-not-a-deployment-secret-123456')
+        from app.config import get_settings
+        get_settings.cache_clear()
+        config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
+        command.downgrade(config, 'base')
+        command.upgrade(config, 'head')
+        yield engine
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture
 def db(engine):
     with engine.begin() as conn:
         conn.execute(text('TRUNCATE auth_events, auth_sessions, login_buckets, users, roles CASCADE'))
+        conn.execute(text('TRUNCATE baseline_tool_states, baseline_evaluations CASCADE'))
     with sessionmaker(engine, expire_on_commit=False)() as session:
         yield session
 

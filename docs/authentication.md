@@ -395,3 +395,17 @@ migrated, no Git stash was applied/deleted, and no commit or push was made.
 | Deleted | `src/services/mfa.ts` |
 | Created | `backend/migrations/versions/0004_remove_mfa.py` |
 | Created | `backend/tests/test_remove_mfa_migration.py` |
+
+### Start Assessment deployment safeguards
+
+Provision `UPTIP_START_REVIEW_KEY` through secure configuration as a dedicated,
+randomly generated secret with at least 32 bytes of entropy (for example, 32 random
+bytes encoded as hex). Keep it separate from session and rate-limiting secrets.
+Rotation invalidates outstanding Start reviews. Missing or short keys disable confirmation.
+
+Run migration `0009` with a separate migration owner. The runtime role needs SELECT
+and INSERT on the Start authorization and audit tables. It must have no UPDATE,
+DELETE, TRUNCATE, ownership, or DDL privileges on those tables or their triggers.
+Check inherited grants as well as direct grants. The row triggers reject updates
+and deletes but do not intercept TRUNCATE. Verify separately that the runtime role
+can acquire the required SHARE lock on `baseline_tool_states`.
