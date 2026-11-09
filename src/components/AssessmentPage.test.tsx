@@ -420,3 +420,27 @@ describe('Assessment Targets', () => {
     }
   })
 })
+
+it('shows all baseline assignments and their reasons in one target row without enabling Start', async () => {
+  const responseData = {
+    status: 'Draft', can_edit: true, counts: { total: 1, eligible: 0, blocked: 0 },
+    targets: [{
+      id: 'baseline-target', original_value: '192.0.2.1', normalized_value: '192.0.2.1',
+      kind: 'IP address', scope_status: 'in_scope', eligibility: 'pending', revision: 1,
+      baseline_summary: 'resolved',
+      baseline_assignments: [
+        { profile_id: 'network-discovery', version: 1, tool: 'Nmap', activity: 'Network Discovery',
+          status: 'resolved', reason: 'Baseline prepared for review.' },
+        { profile_id: 'other-network-profile', version: 2, tool: 'Nmap', activity: 'Additional profile',
+          status: 'unavailable', reason: 'Required tool capability is unavailable.' },
+      ],
+    }],
+  }
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(responseData)))
+  renderPage(draftPath + '/targets')
+  const table = await screen.findByRole('table', { name: 'Target baseline status' })
+  expect(within(table).getAllByRole('row')).toHaveLength(2)
+  expect(within(table).getByText('Resolved — Baseline prepared for review.')).toBeVisible()
+  expect(within(table).getByText('Unavailable — Required tool capability is unavailable.')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Start Assessment' })).toBeDisabled()
+})

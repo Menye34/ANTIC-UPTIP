@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .assessment_routes import analyst
 from .database import get_db
+from .baseline_resolution import baseline_view, current_assignments, reconcile, tool_states
 from .models import AssessmentTarget, User
 from .scope_routes import Removal, Revision, can_edit, parent, problem
 from .scope_validation import normalize
@@ -37,6 +38,8 @@ class TargetView(BaseModel):
     scope_revision: int
     revision: int
     eligibility: str = 'blocked'
+    baseline_assignments: list[dict] = Field(default_factory=list)
+    baseline_summary: str = 'pending'
     created_at: datetime
     updated_at: datetime
 
@@ -44,6 +47,8 @@ class TargetView(BaseModel):
 def listing(assessment, user, db):
     entries = db.scalars(select(AssessmentTarget).where(AssessmentTarget.assessment_id == assessment.id)
                          .order_by(AssessmentTarget.created_at, AssessmentTarget.id))
+    states = tool_states(db)
+    current = current_assignments(db, assessment.id)
     targets = []
     for entry in entries:
         view = TargetView.model_validate(entry)
@@ -52,6 +57,8 @@ def listing(assessment, user, db):
             view.classification_reason = 'Authorized scope changed since classification.'
         if view.scope_status == 'in_scope':
             view.eligibility = 'pending'
+        view.baseline_assignments, view.baseline_summary = baseline_view(
+            entry, assessment.scope_revision, states, current.get(entry.id, {}))
         targets.append(view)
     return {'targets': targets, 'can_edit': can_edit(assessment, user), 'status': assessment.status,
             'counts': {'total': len(targets), 'eligible': 0,
@@ -83,6 +90,7 @@ def save_target(assessment, user, db, value, target=None):
     if db.scalar(duplicate) is not None:
         return problem(409, 'duplicate_entry')
     status, reason = classify(normalized, kind, scope_entries(db, assessment.id))
+    trigger = 'target_created' if target is None else 'target_edited'
     if target is None:
         target = AssessmentTarget(assessment_id=assessment.id)
         db.add(target)
@@ -93,6 +101,8 @@ def save_target(assessment, user, db, value, target=None):
     target.kind = kind
     target.scope_status, target.classification_reason = status, reason
     target.scope_revision = assessment.scope_revision
+    db.flush()
+    reconcile(db, assessment, trigger, [target])
     return finish(assessment, user, db)
 
 

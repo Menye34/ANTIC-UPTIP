@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from .assessment_routes import accessible, analyst
 from .config import get_settings
 from .database import get_db
+from .baseline_resolution import reconcile
 from .models import Assessment, ScopeEntry, ScopeEvent, User
 from .routes import trusted_origin
 from .scope_validation import normalize
@@ -120,6 +121,8 @@ def mutate(assessment_id, scope_id, body, request, user, db, action):
         result = listing(assessment, user, db)
         result['changed'] = after or before
         result['affected_target_count'] = reclassify_targets(db, assessment, previous_boundaries)
+        db.flush()
+        reconcile(db, assessment, 'scope_changed')
         db.commit()
     except SQLAlchemyError:
         db.rollback()

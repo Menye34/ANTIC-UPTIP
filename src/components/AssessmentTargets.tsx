@@ -7,6 +7,12 @@ import { ScopeError, scopeInputError } from '../services/scope'
 import './AuthorizedScope.css'
 import './AssessmentTargets.css'
 
+const baselineLabels = {
+  pending: 'Pending', resolved: 'Resolved', blocked: 'Blocked',
+  requires_revalidation: 'Requires Revalidation', unavailable: 'Unavailable',
+  no_compatible_baseline: 'No compatible baseline',
+}
+
 const scopeLabels = { in_scope: 'In scope', out_of_scope: 'Out of scope', requires_revalidation: 'Requires revalidation' }
 
 export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
@@ -149,8 +155,13 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
         {data.targets.length ? <table aria-label="Target baseline status"><thead><tr>
           {['Target', 'Baseline', 'Status'].map(label => <th scope="col" key={label}>{label}</th>)}
         </tr></thead><tbody>{data.targets.map(target => <tr key={target.id}>
-          <td>{target.normalized_value}</td><td>—</td>
-          <td data-eligibility={target.eligibility}>{target.eligibility === 'pending' ? 'Pending' : 'Blocked'}</td>
+          <td>{target.normalized_value}</td>
+          <td colSpan={2}>{target.baseline_assignments?.length ? <ul className="baseline-assignments">
+            {target.baseline_assignments.map(assignment => <li key={assignment.profile_id}>
+              <strong>{assignment.tool} · {assignment.activity} · v{assignment.version}</strong>
+              <span>{baselineLabels[assignment.status]} — {assignment.reason}</span>
+            </li>)}
+          </ul> : baselineLabels[target.baseline_summary ?? target.eligibility]}</td>
         </tr>)}</tbody></table> : <p>No baselines resolved yet. Add assessment targets to allow UPTIP to automatically determine their compatible testing baselines.</p>}
       </section>
       <section className="analyst-card">

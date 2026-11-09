@@ -1,5 +1,15 @@
 import { ScopeError } from './scope'
 
+export interface BaselineAssignment {
+  profile_id: string
+  version: number
+  tool: string
+  activity: string
+  status: 'pending' | 'resolved' | 'blocked' | 'requires_revalidation' | 'unavailable'
+  reason_code: string
+  reason: string
+}
+
 export interface Target {
   id: string
   original_value: string
@@ -9,6 +19,8 @@ export interface Target {
   eligibility: 'pending' | 'blocked'
   classification_reason: string
   revision: number
+  baseline_assignments?: BaselineAssignment[]
+  baseline_summary?: BaselineAssignment['status'] | 'no_compatible_baseline'
 }
 
 interface TargetList {

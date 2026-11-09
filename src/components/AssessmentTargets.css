@@ -22,3 +22,6 @@
 .assessment-targets .target-list th:nth-child(2) { width: 14%; }
 .assessment-targets .target-list th:nth-child(3) { width: 17%; }
 .assessment-targets .target-baselines th:last-child { width: 39%; }
+.assessment-targets .baseline-assignments { list-style: none; margin: 0; padding: 0; }
+.assessment-targets .baseline-assignments li + li { margin-top: 8px; }
+.assessment-targets .baseline-assignments span { display: block; color: #475569; }

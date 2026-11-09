@@ -145,3 +145,35 @@ class AssessmentTarget(Base):
     revision: Mapped[int] = mapped_column(Integer, server_default='1')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class BaselineToolState(Base):
+    __tablename__ = 'baseline_tool_states'
+    __table_args__ = (
+        CheckConstraint("state IN ('enabled', 'disabled', 'unavailable', 'unknown')", name='ck_baseline_tool_state'),
+        CheckConstraint('revision > 0', name='ck_baseline_tool_revision'),
+    )
+    tool: Mapped[str] = mapped_column(String(32), primary_key=True)
+    state: Mapped[str] = mapped_column(String(16))
+    capabilities: Mapped[list] = mapped_column(JSON)
+    revision: Mapped[int] = mapped_column(Integer)
+
+
+class BaselineEvaluation(Base):
+    __tablename__ = 'baseline_evaluations'
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    # Historical identifiers survive target and assessment removal.
+    assessment_id: Mapped[UUID] = mapped_column(index=True)
+    target_id: Mapped[UUID] = mapped_column(index=True)
+    profile_key: Mapped[str] = mapped_column(String(80))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[dict] = mapped_column(JSON)
+    trigger: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BaselineAssignment(Base):
+    __tablename__ = 'baseline_assignments'
+    target_id: Mapped[UUID] = mapped_column(ForeignKey('assessment_targets.id', ondelete='CASCADE'), primary_key=True)
+    profile_key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    evaluation_id: Mapped[UUID] = mapped_column(ForeignKey('baseline_evaluations.id'), unique=True)
