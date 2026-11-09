@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import AssessmentTargets from './AssessmentTargets'
 import AuthorizedScope from './AuthorizedScope'
 import AnalystShell from './AnalystShell'
 import { AssessmentRequestError, createAssessment, getAssessment } from '../services/assessments'
@@ -193,8 +194,8 @@ function Overview({ path, showCreated, onExpired }: AssessmentPageProps) {
       <div className="analyst-stack">
         <section className="analyst-card"><h2>Authorized scope</h2><h3>{assessment.scope_entry_count ? `${assessment.scope_entry_count} authorized scope entries` : 'No authorized scope defined'}</h3>
           <p>Define the boundaries within which assessment activity is permitted.</p></section>
-        <section className="analyst-card"><h2>Targets</h2><strong className="assessment-target-count">0 targets</strong>
-          <p>No targets have been added yet.</p><small>Each target is classified and its baseline is prepared automatically.</small></section>
+        <section className="analyst-card"><h2>Targets</h2><strong className="assessment-target-count">{assessment.target_count ?? 0} {(assessment.target_count ?? 0) === 1 ? 'target' : 'targets'}</strong>
+          {!assessment.target_count && <p>No targets have been added yet.</p>}<small>Each target is classified and its baseline is prepared automatically.</small></section>
       </div>
       <div className="analyst-stack">
         <section className="analyst-card"><h2>Assessment details</h2>
@@ -215,12 +216,14 @@ function Overview({ path, showCreated, onExpired }: AssessmentPageProps) {
 
 export default function AssessmentPage(props: AssessmentPageProps) {
   const create = props.path.endsWith('/new')
-  const scopeOverview = props.path.endsWith('/scope') ? props.path.slice(0, -6) : undefined
-  return <AnalystShell scopeOverview={scopeOverview} sidebar={create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
+  const targets = props.path.endsWith('/targets')
+  const scopeOverview = /\/(scope|targets)$/.test(props.path) ? props.path.replace(/\/(scope|targets)$/, '') : undefined
+  return <AnalystShell targetsActive={targets} scopeOverview={scopeOverview} sidebar={create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
     initials={props.username.slice(0, 2).toUpperCase()} signingOut={props.signingOut} onSignOut={props.onSignOut}>
     <main className={create ? 'analyst-content' : 'analyst-content assessment-overview'}>
       {props.logoutFailed && <p role="alert">Unable to sign out. Please try again.</p>}
-      {create ? <CreateForm {...props} /> : scopeOverview ? <AuthorizedScope overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} /> : <Overview {...props} />}
+      {create ? <CreateForm {...props} /> : scopeOverview && targets ? <AssessmentTargets overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} />
+        : scopeOverview ? <AuthorizedScope overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} /> : <Overview {...props} />}
     </main>
   </AnalystShell>
 }

@@ -179,7 +179,7 @@ export default function AuthorizedScope({ overview, csrfToken, onExpired }: {
         </table>
       </section>
       <footer><small>Scope entries define boundaries; they do not automatically create assessment targets.</small>
-        <button className="analyst-create" disabled>Continue to Assessment Targets</button></footer>
+        <a className="analyst-create" href={overview + '/targets'}>Continue to Assessment Targets</a></footer>
     </>}
     {removing && <dialog ref={dialog} aria-labelledby="scope-remove-title" onCancel={event => {
       event.preventDefault()

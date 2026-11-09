@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, aliased
 
 from .config import get_settings
 from .database import get_db
-from .models import Assessment, AssessmentAssignment, AssessmentCreationEvent, ScopeEntry, User, assessment_reference_sequence
+from .models import Assessment, AssessmentAssignment, AssessmentCreationEvent, AssessmentTarget, ScopeEntry, User, assessment_reference_sequence
 from .routes import require_role, trusted_origin
 from .security import digest, session_csrf
 
@@ -51,6 +51,7 @@ class AssessmentOverview(AssessmentSummary):
     created_by: str
     created_at: datetime
     scope_entry_count: int = 0
+    target_count: int = 0
 
 
 def accessible(user: User):
@@ -58,10 +59,10 @@ def accessible(user: User):
     return (Assessment.creator_id == user.id) | Assessment.id.in_(assigned)
 
 
-def overview(assessment, lead, actor, occurred_at, scope_entry_count=0):
+def overview(assessment, lead, actor, occurred_at, scope_entry_count=0, target_count=0):
     return AssessmentOverview(**AssessmentSummary.model_validate(assessment).model_dump(),
         description=assessment.description, start_date=assessment.start_date,
-        lead_analyst=lead, created_by=actor, created_at=occurred_at, scope_entry_count=scope_entry_count)
+        lead_analyst=lead, created_by=actor, created_at=occurred_at, scope_entry_count=scope_entry_count, target_count=target_count)
 
 
 @router.post('', status_code=201, response_model=AssessmentOverview)
@@ -120,7 +121,9 @@ def get_assessment(assessment_id: UUID, user: User = Depends(analyst), db: Sessi
     lead = aliased(User)
     actor = aliased(User)
     count = select(func.count()).select_from(ScopeEntry).where(ScopeEntry.assessment_id == Assessment.id).scalar_subquery()
-    row = db.execute(select(Assessment, lead.username, actor.username, AssessmentCreationEvent.occurred_at, count)
+    targets = select(func.count()).select_from(AssessmentTarget).where(
+        AssessmentTarget.assessment_id == Assessment.id).scalar_subquery()
+    row = db.execute(select(Assessment, lead.username, actor.username, AssessmentCreationEvent.occurred_at, count, targets)
         .join(lead, Assessment.lead_analyst_id == lead.id)
         .join(AssessmentCreationEvent, AssessmentCreationEvent.assessment_id == Assessment.id)
         .join(actor, AssessmentCreationEvent.actor_id == actor.id)

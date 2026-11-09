@@ -132,5 +132,5 @@ def test_scope_database_constraints(client, db):
         with pytest.raises(IntegrityError):
             db.flush()
         db.rollback()
-    assert not any('target' in name for name in db.scalars(text(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")))
+    from app.models import AssessmentTarget
+    assert db.scalars(select(AssessmentTarget)).all() == []

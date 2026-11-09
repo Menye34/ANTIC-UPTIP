@@ -12,7 +12,7 @@ const navigation = [
   ['Testing', document], ['Findings', document], ['Report', document], ['Audit Log', document],
 ]
 
-export default function AnalystShell({ children, displayName, initials, signingOut, onSignOut, sidebar = true, createActive = false, scopeOverview }: {
+export default function AnalystShell({ children, displayName, initials, signingOut, onSignOut, sidebar = true, createActive = false, scopeOverview, targetsActive = false }: {
   children: ReactNode
   displayName?: string
   initials?: string
@@ -21,6 +21,7 @@ export default function AnalystShell({ children, displayName, initials, signingO
   sidebar?: boolean
   createActive?: boolean
   scopeOverview?: string
+  targetsActive?: boolean
 }) {
   const [accountOpen, setAccountOpen] = useState(false)
   const accountButton = useRef<HTMLButtonElement>(null)
@@ -33,8 +34,8 @@ export default function AnalystShell({ children, displayName, initials, signingO
           : scopeOverview && index === 1 ? <a href={scopeOverview} key={label}><img src={icon} alt="" />Assessment</a>
           : scopeOverview && index === 2 ? <div className="analyst-assessment-nav" key={label}>
             <details open><summary><img src={icon} alt="" />Setup</summary>
-              <a href={scopeOverview + '/scope'} aria-current="page">Authorized Scope</a>
-              <button type="button" disabled>Assessment Targets</button>
+              <a href={scopeOverview + '/scope'} aria-current={targetsActive ? undefined : "page"}>Authorized Scope</a>
+              <a href={scopeOverview + '/targets'} aria-current={targetsActive ? "page" : undefined}>Assessment Targets</a>
             </details>
           </div>
           : index === 1 ? <div className="analyst-assessment-nav" key={label}>

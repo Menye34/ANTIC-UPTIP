@@ -124,3 +124,24 @@ class ScopeEvent(Base):
     before: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     after: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AssessmentTarget(Base):
+    __tablename__ = 'assessment_targets'
+    __table_args__ = (
+        UniqueConstraint('assessment_id', 'normalized_value', name='uq_assessment_target_value'),
+        CheckConstraint("kind IN ('IP address', 'Subnet', 'Hostname', 'Web URL')", name='ck_target_kind'),
+        CheckConstraint("scope_status IN ('in_scope', 'out_of_scope', 'requires_revalidation')", name='ck_target_scope'),
+        CheckConstraint('scope_revision >= 0 AND revision > 0', name='ck_target_revisions'),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id', ondelete='CASCADE'))
+    original_value: Mapped[str] = mapped_column(String(1024))
+    normalized_value: Mapped[str] = mapped_column(String(1024))
+    kind: Mapped[str] = mapped_column(String(16))
+    scope_status: Mapped[str] = mapped_column(String(24))
+    classification_reason: Mapped[str] = mapped_column(String(80))
+    scope_revision: Mapped[int] = mapped_column(Integer)
+    revision: Mapped[int] = mapped_column(Integer, server_default='1')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

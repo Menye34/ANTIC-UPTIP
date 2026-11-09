@@ -284,10 +284,10 @@ describe('Authorized Scope', () => {
     const setup = within(nav).getByText('Setup').closest('details')
     expect(setup).toHaveAttribute('open')
     expect(within(setup!).getByRole('link', { name: 'Authorized Scope' })).toHaveAttribute('aria-current', 'page')
-    expect(within(setup!).getByRole('button', { name: 'Assessment Targets' })).toBeDisabled()
+    expect(within(setup!).getByRole('link', { name: 'Assessment Targets' })).toHaveAttribute('href', draftPath + '/targets')
     expect(within(nav).getByRole('link', { name: 'Assessment' })).toHaveAttribute('href', draftPath)
     expect(within(nav).getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current')
-    expect(screen.getByRole('button', { name: 'Continue to Assessment Targets' })).toBeDisabled()
+    expect(screen.getByRole('link', { name: 'Continue to Assessment Targets' })).toHaveAttribute('href', draftPath + '/targets')
     const input = screen.getByRole('textbox', { name: 'Scope entry' })
     const add = screen.getByRole('button', { name: 'Add to Scope' })
     fireEvent.click(add)
@@ -361,5 +361,62 @@ describe('Authorized Scope', () => {
     await act(async () => finish(response({ ...empty, revision: 1, entries: [entry], changed: entry }, 201)))
     expect(screen.queryByText(entry.value)).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Scope entry' })).not.toBeInTheDocument()
+  })
+})
+
+describe('Assessment Targets', () => {
+  it('renders AT-01, validates input, and renders AT-02 from the API response', async () => {
+    const empty = { status: 'Draft', can_edit: true, targets: [], counts: { total: 0, eligible: 0, blocked: 0 } }
+    const target = { id: 'target-id', original_value: '192.0.2.4', normalized_value: '192.0.2.4',
+      kind: 'IP address', scope_status: 'in_scope', eligibility: 'pending', revision: 1 }
+    const populated = { ...empty, targets: [target], counts: { total: 1, eligible: 0, blocked: 0 } }
+    const updated = { ...target, normalized_value: '192.0.2.5', scope_status: 'out_of_scope', eligibility: 'blocked', revision: 2 }
+    const fetcher = vi.fn().mockResolvedValueOnce(response(empty))
+      .mockResolvedValueOnce(response(populated, 201))
+      .mockResolvedValueOnce(response({ code: 'duplicate_entry' }, 409))
+      .mockResolvedValueOnce(response({ ...populated, targets: [updated], counts: { total: 1, eligible: 0, blocked: 1 } }))
+      .mockResolvedValueOnce(response(empty))
+    vi.stubGlobal('fetch', fetcher)
+    renderPage(draftPath + '/targets')
+    expect(await screen.findByText('No targets added. Add a target to begin system preparation.')).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Back to Authorized Scope' })).toHaveAttribute('href', draftPath + '/scope')
+    const start = screen.getByRole('button', { name: 'Start Assessment' })
+    expect(start).toBeDisabled()
+    const field = screen.getByRole('textbox', { name: 'Target' })
+    fireEvent.change(field, { target: { value: '999.0.0.1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add Target' }))
+    expect(field).toHaveAttribute('aria-invalid', 'true')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    fireEvent.change(field, { target: { value: target.original_value } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add Target' }))
+    expect(await screen.findByText('In scope')).toBeVisible()
+    expect(screen.getAllByText('Pending')).toHaveLength(2)
+    expect(screen.getByText('Total targets').nextElementSibling).toHaveTextContent('1')
+    expect(start).toBeDisabled()
+    fireEvent.change(field, { target: { value: target.original_value } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add Target' }))
+    expect(await screen.findByText('This target already exists. Enter a different value.')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit 192.0.2.4' }))
+    expect(screen.getByRole('textbox', { name: 'Edit target' })).toHaveValue('192.0.2.4')
+    fireEvent.change(field, { target: { value: '192.0.2.5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Target' }))
+    expect(await screen.findByText('Out of scope')).toBeVisible()
+    expect(screen.getByText('Blocked targets').nextElementSibling).toHaveTextContent('1')
+    const showModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
+    const close = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
+    Object.defineProperties(HTMLDialogElement.prototype, {
+      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true } },
+      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false } },
+    })
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove 192.0.2.5' }))
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove Target' }))
+      expect(await screen.findByText('No targets added. Add a target to begin system preparation.')).toBeVisible()
+    } finally {
+      if (showModal) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', showModal)
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal')
+      if (close) Object.defineProperty(HTMLDialogElement.prototype, 'close', close)
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
+    }
   })
 })

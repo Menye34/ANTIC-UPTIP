@@ -15,6 +15,7 @@ from .models import Assessment, ScopeEntry, ScopeEvent, User
 from .routes import trusted_origin
 from .scope_validation import normalize
 from .security import session_csrf
+from .target_scope import reclassify_targets, scope_entries
 
 router = APIRouter(prefix='/api/v1/assessments/{assessment_id}/scope')
 
@@ -86,6 +87,7 @@ def mutate(assessment_id, scope_id, body, request, user, db, action):
         if entry is None:
             raise HTTPException(404)
         before = snapshot(entry)
+    previous_boundaries = scope_entries(db, assessment_id)
     if action == 'removed':
         if not body.confirmed:
             return problem(422, 'confirmation_required')
@@ -117,8 +119,7 @@ def mutate(assessment_id, scope_id, body, request, user, db, action):
         db.flush()
         result = listing(assessment, user, db)
         result['changed'] = after or before
-        # Target registration arrives in Phase C2. Invalidate its future decisions by revision.
-        result['affected_target_count'] = 0
+        result['affected_target_count'] = reclassify_targets(db, assessment, previous_boundaries)
         db.commit()
     except SQLAlchemyError:
         db.rollback()

@@ -13,6 +13,7 @@ export interface Assessment extends AssessmentDraft {
   created_by: string
   created_at: string
   scope_entry_count?: number
+  target_count?: number
 }
 
 export class AssessmentRequestError extends Error {
