@@ -1,7 +1,8 @@
 from datetime import date, datetime
+import json
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, Sequence, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, Sequence, String, Text, UniqueConstraint, event, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -161,6 +162,8 @@ class BaselineToolState(Base):
 
 class BaselineEvaluation(Base):
     __tablename__ = 'baseline_evaluations'
+    __table_args__ = (UniqueConstraint('id', 'assessment_id', 'target_id', 'fingerprint',
+                                       name='uq_baseline_evaluation_binding'),)
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     # Historical identifiers survive target and assessment removal.
     assessment_id: Mapped[UUID] = mapped_column(index=True)
@@ -204,3 +207,90 @@ class AssessmentStartEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     from_status: Mapped[str] = mapped_column(String(16))
     to_status: Mapped[str] = mapped_column(String(16))
+
+
+class ExecutionPolicyVersion(Base):
+    __tablename__ = 'execution_policy_versions'
+    __table_args__ = (
+        CheckConstraint('version > 0', name='ck_policy_version_positive'),
+        CheckConstraint("digest ~ '^[0-9a-f]{64}$'", name='ck_policy_digest'),
+        CheckConstraint("json_typeof(definition) = 'object'", name='ck_policy_definition_object'),
+        CheckConstraint("btrim(policy_id) <> ''", name='ck_policy_id_present'),
+    )
+    policy_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    version: Mapped[int] = mapped_column(primary_key=True)
+    digest: Mapped[str] = mapped_column(String(64), unique=True)
+    definition: Mapped[dict] = mapped_column(JSON)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExecutionPolicyApprovalRecord(Base):
+    __tablename__ = 'execution_policy_approvals'
+    __table_args__ = (
+        UniqueConstraint('reference', 'policy_digest', name='uq_policy_approval_binding'),
+        CheckConstraint('valid_until > valid_from', name='ck_policy_approval_window'),
+        CheckConstraint("btrim(reference) <> '' AND btrim(provenance) <> ''", name='ck_policy_approval_identity'),
+    )
+    reference: Mapped[str] = mapped_column(String(160), primary_key=True)
+    policy_digest: Mapped[str] = mapped_column(ForeignKey('execution_policy_versions.digest'), index=True)
+    provenance: Mapped[str] = mapped_column(Text)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AssessmentStartEvidenceRecord(Base):
+    __tablename__ = 'assessment_start_evidence'
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['evaluation_id', 'assessment_id', 'target_id', 'evaluation_fingerprint'],
+            ['baseline_evaluations.id', 'baseline_evaluations.assessment_id',
+             'baseline_evaluations.target_id', 'baseline_evaluations.fingerprint'],
+            name='fk_start_evidence_evaluation_binding',
+        ),
+        ForeignKeyConstraint(
+            ['approval_reference', 'policy_digest'],
+            ['execution_policy_approvals.reference', 'execution_policy_approvals.policy_digest'],
+            name='fk_start_evidence_approval_binding',
+        ),
+        CheckConstraint('valid_until > valid_from', name='ck_start_evidence_window'),
+        CheckConstraint("json_typeof(evidence) = 'object'", name='ck_start_evidence_object'),
+        CheckConstraint("btrim(reference) <> '' AND btrim(provenance) <> ''", name='ck_start_evidence_identity'),
+        Index('ix_start_evidence_binding', 'assessment_id', 'target_id', 'evaluation_fingerprint', 'policy_digest'),
+        Index('ix_start_evidence_approval', 'approval_reference', 'policy_digest'),
+    )
+    reference: Mapped[str] = mapped_column(String(160), primary_key=True)
+    assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id'))
+    target_id: Mapped[UUID]
+    evaluation_id: Mapped[UUID] = mapped_column(index=True)
+    evaluation_fingerprint: Mapped[str] = mapped_column(String(64))
+    approval_reference: Mapped[str] = mapped_column(String(160))
+    policy_digest: Mapped[str] = mapped_column(String(64))
+    provenance: Mapped[str] = mapped_column(Text)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evidence: Mapped[dict] = mapped_column(JSON)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuthorizationRecordRevocation(Base):
+    __tablename__ = 'authorization_record_revocations'
+    __table_args__ = (
+        CheckConstraint('(approval_reference IS NULL) <> (evidence_reference IS NULL)',
+                        name='ck_authorization_revocation_subject'),
+        CheckConstraint("btrim(reason) <> '' AND btrim(provenance) <> ''", name='ck_authorization_revocation_reason'),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    approval_reference: Mapped[str | None] = mapped_column(ForeignKey('execution_policy_approvals.reference'), unique=True)
+    evidence_reference: Mapped[str | None] = mapped_column(ForeignKey('assessment_start_evidence.reference'), unique=True)
+    reason: Mapped[str] = mapped_column(Text)
+    provenance: Mapped[str] = mapped_column(Text)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+@event.listens_for(ExecutionPolicyVersion, 'before_insert')
+def validate_policy_version(mapper, connection, record):
+    from .execution_policy import PolicyDefinition
+
+    policy = PolicyDefinition.model_validate_json(json.dumps(record.definition))
+    if (record.policy_id, record.version, record.digest) != (policy.policy_id, policy.version, policy.digest):
+        raise ValueError('Policy identity or digest does not match its definition.')

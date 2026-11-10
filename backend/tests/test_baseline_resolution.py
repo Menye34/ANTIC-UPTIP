@@ -110,7 +110,7 @@ def test_baseline_migration_round_trip_preserves_targets(client, db, engine):
         with engine.connect() as connection:
             assert connection.scalar(text('SELECT count(*) FROM assessment_targets')) == 1
     finally:
-        command.upgrade(config, '0008')
+        command.upgrade(config, 'head')
     result = client.get(path).json()['targets'][0]
     assert result['normalized_value'] == '192.0.2.1'
     assert result['baseline_summary'] == 'pending'

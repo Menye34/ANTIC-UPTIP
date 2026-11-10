@@ -409,3 +409,20 @@ DELETE, TRUNCATE, ownership, or DDL privileges on those tables or their triggers
 Check inherited grants as well as direct grants. The row triggers reject updates
 and deletes but do not intercept TRUNCATE. Verify separately that the runtime role
 can acquire the required SHARE lock on `baseline_tool_states`.
+
+### Governed authorization records
+
+Migration `0010` introduces storage only. Policy publishers, independent
+approval authorities, and trusted evidence producers are distinct roles.
+Keep the application runtime read-only on these tables. Provision writer
+roles separately, with insert privileges only for their own records. For
+revocations, grant column-specific insert privileges so an approval authority
+can name only an approval and an evidence authority can name only evidence.
+Keep ownership, DDL, trigger control, and TRUNCATE with the migration owner.
+
+A correction requires a new version or record and an explicit revocation of
+the previous approval or evidence. A future provider must revalidate canonical
+digests, approval and evidence validity windows, revocation, current baseline
+binding, and provenance. It must reject ambiguous active records and coordinate
+selection with revocation through the Start transaction. This migration
+does not seed records or connect the provider.

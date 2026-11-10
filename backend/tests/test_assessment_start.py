@@ -298,6 +298,7 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(client, db,
     with pytest.raises(DBAPIError, match='append-only'):
         with engine.begin() as connection:
             connection.execute(text('DELETE FROM assessment_start_authorizations'))
+    command.upgrade(config, 'head')
 
 
 @pytest.mark.parametrize('case', [
