@@ -27,3 +27,10 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Python development
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.coverage

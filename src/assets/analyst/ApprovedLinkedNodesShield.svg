@@ -1,0 +1,11 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Approved linked nodes shield" clip-path="url(#clip0_0_163)">
+<path id="Linked square terminals" d="M10.08 0H13.92V3.36H12.96V6.24H14.4V10.08H9.6V6.24H11.04V3.36H10.08V0Z" fill="#0EA5A4"/>
+<path id="Open U shield perimeter" d="M0 0H5.28V11.28C5.28 14.32 7.52 17.12 12 19.68C16.48 17.12 18.72 14.32 18.72 11.28V0H24V11.76C24 16.4 20 20.48 12 24C4 20.48 0 16.4 0 11.76V0Z" fill="white"/>
+</g>
+<defs>
+<clipPath id="clip0_0_163">
+<rect width="24" height="24" fill="white"/>
+</clipPath>
+</defs>
+</svg>
