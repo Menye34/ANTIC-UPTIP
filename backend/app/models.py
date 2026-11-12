@@ -69,7 +69,7 @@ class Assessment(Base):
     __tablename__ = 'assessments'
     __table_args__ = (
         UniqueConstraint('creator_id', 'idempotency_key', name='uq_assessments_creator_idempotency'),
-        CheckConstraint("status IN ('Draft', 'Ready')", name='ck_assessments_start_state'),
+        CheckConstraint("status IN ('Draft', 'Ready', 'Testing')", name='ck_assessments_start_state'),
         CheckConstraint('end_date >= start_date', name='ck_assessments_window'),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -130,6 +130,7 @@ class ScopeEvent(Base):
 class AssessmentTarget(Base):
     __tablename__ = 'assessment_targets'
     __table_args__ = (
+        UniqueConstraint('id', 'assessment_id', name='uq_assessment_target_identity'),
         UniqueConstraint('assessment_id', 'normalized_value', name='uq_assessment_target_value'),
         CheckConstraint("kind IN ('IP address', 'Subnet', 'Hostname', 'Web URL')", name='ck_target_kind'),
         CheckConstraint("scope_status IN ('in_scope', 'out_of_scope', 'requires_revalidation')", name='ck_target_scope'),
@@ -186,6 +187,7 @@ class AssessmentStartAuthorization(Base):
     __tablename__ = 'assessment_start_authorizations'
     __table_args__ = (
         UniqueConstraint('assessment_id', 'actor_id', 'idempotency_key', name='uq_start_actor_key'),
+        UniqueConstraint('id', 'assessment_id', name='uq_start_authorization_assessment'),
         CheckConstraint("mode IN ('full', 'partial')", name='ck_start_mode'),
         CheckConstraint('snapshot_version > 0', name='ck_start_snapshot_version'),
     )
@@ -300,3 +302,32 @@ from .system_authorization_models import (
     SystemPolicyAuthorizationRecord,
     SystemPolicyAuthorizationRevocation,
 )
+
+
+class BaselineExecutionRequest(Base):
+    __tablename__ = 'baseline_execution_requests'
+    __table_args__ = (
+        UniqueConstraint('authorization_id', 'target_id', 'profile_id', name='uq_baseline_execution_activity'),
+        CheckConstraint("status IN ('Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled')",
+                        name='ck_baseline_execution_status'),
+        CheckConstraint('profile_version > 0', name='ck_baseline_execution_profile_version'),
+        ForeignKeyConstraint(['authorization_id', 'assessment_id'],
+                             ['assessment_start_authorizations.id', 'assessment_start_authorizations.assessment_id'],
+                             name='fk_execution_authorization_assessment'),
+        ForeignKeyConstraint(['target_id', 'assessment_id'],
+                             ['assessment_targets.id', 'assessment_targets.assessment_id'],
+                             name='fk_execution_target_assessment'),
+        Index('ix_execution_assessment_created', 'assessment_id', 'created_at', 'id'),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    assessment_id: Mapped[UUID]
+    authorization_id: Mapped[UUID]
+    target_id: Mapped[UUID]
+    profile_id: Mapped[str] = mapped_column(String(80))
+    profile_version: Mapped[int]
+    tool: Mapped[str] = mapped_column(String(80))
+    activity: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(16), default='Queued')
+    authorized_activity: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

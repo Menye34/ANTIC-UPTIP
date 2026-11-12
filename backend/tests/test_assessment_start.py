@@ -136,13 +136,13 @@ def test_full_start_and_replay(client, db, start_case, monkeypatch):
         response = client.post(path + '/start', headers=headers, json=body)
     assert response.status_code == 201, response.text
     receipt = response.json()
-    assert receipt['lifecycle_status'] == 'Ready' and receipt['execution_authorized'] is False
+    assert receipt['lifecycle_status'] == 'Testing' and receipt['execution_authorized'] is False
     assert receipt['authorized_activity_count'] == 1
     record = db.get(AssessmentStartAuthorization, UUID(receipt['authorization_id']))
     assert record.snapshot_digest == reviewed['snapshot_digest']
     assert record.snapshot['eligible_activities'] == reviewed['eligible_activities']
-    assert db.get(AssessmentStartEvent, record.id).to_status == 'Ready'
-    assert db.get(Assessment, record.assessment_id).status == 'Ready'
+    assert db.get(AssessmentStartEvent, record.id).to_status == 'Testing'
+    assert db.get(Assessment, record.assessment_id).status == 'Testing'
     monkeypatch.setattr('app.assessment_routes.verify_review_token', lambda *_: pytest.fail('Replay reverified token'))
     replay = client.post(path + '/start', headers=headers, json=body)
     assert replay.status_code == 200 and replay.json() == receipt
@@ -397,14 +397,14 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(client, db,
 
     config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
     command.downgrade(config, '0008')
-    command.upgrade(config, '0009')
+    command.upgrade(config, 'head')
     assert client.get(path).json()['status'] == 'Draft'
     response = client.post(path + '/start', headers=headers, json=confirmation(review(client, path)))
     assert response.status_code == 201
     with pytest.raises(DBAPIError, match='Cannot downgrade'):
         command.downgrade(config, '0008')
     with engine.connect() as connection:
-        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '0009'
+        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '0012'
     with pytest.raises(DBAPIError, match='append-only'):
         with engine.begin() as connection:
             connection.execute(text('DELETE FROM assessment_start_authorizations'))

@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 import hmac
+import logging
 import re
 from typing import Literal
 from uuid import UUID, uuid4
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session, aliased
 from .assessment_readiness import evaluate_readiness
 from .assessment_start import signing_key, snapshot_for, start_review, verify_review_token
 from .baseline_catalog import fingerprint
+from .baseline_scheduling import queue_baselines, queued_requests
 from .config import get_settings
 from .database import get_db
 from .models import Assessment, AssessmentAssignment, AssessmentCreationEvent, AssessmentStartAuthorization, AssessmentStartEvent, AssessmentTarget, AuthSession, ScopeEntry, User, assessment_reference_sequence
@@ -157,6 +159,9 @@ def get_readiness(assessment_id: UUID, request: Request, response: Response,
             pair = (str(target['target_id']), activity['profile_id'])
             activity['start_review_eligible'] = review['confirmation_possible'] and pair in eligible
         target['start_review_eligible'] = any(item['start_review_eligible'] for item in target['baseline_activities'])
+    logging.getLogger('uptip.assessment').info(
+        'start_review actor=%s assessment=%s confirmable=%s', user.id, assessment_id, review['confirmation_possible'],
+    )
     return {**readiness, 'start_review_eligible': review['confirmation_possible'], 'start_review': review}
 
 class StartConfirmation(BaseModel):
@@ -173,16 +178,23 @@ class StartConfirmation(BaseModel):
         return value
 
 
-def start_conflict(code):
+def start_conflict(code, actor_id=None, assessment_id=None):
+    logging.getLogger('uptip.assessment').info(
+        'start_rejected actor=%s assessment=%s code=%s', actor_id, assessment_id, code,
+    )
     return JSONResponse(status_code=409, content={'detail': {'code': code}},
                         headers={'Cache-Control': 'no-store'})
 
 
-def start_receipt(record):
+def start_receipt(record, requests):
     return {
         'authorization_id': record.id, 'assessment_id': record.assessment_id,
-        'lifecycle_status': 'Ready', 'mode': record.mode, 'confirmed_at': record.confirmed_at.astimezone(timezone.utc),
+        'lifecycle_status': 'Testing' if requests else 'Ready', 'mode': record.mode, 'confirmed_at': record.confirmed_at.astimezone(timezone.utc),
         'snapshot_digest': record.snapshot_digest, 'execution_authorized': False,
+        'queued_execution_count': len(requests), 'queued_execution_ids': [item.id for item in requests],
+        'testing_url': f'/api/v1/assessments/{record.assessment_id}/testing',
+        'excluded_activities': record.snapshot['excluded_activities'],
+        'excluded_targets': record.snapshot['excluded_targets'],
         'authorized_activity_count': len(record.snapshot['eligible_activities']),
         'authorized_target_count': len({item['target_id'] for item in record.snapshot['eligible_activities']}),
         'excluded_activity_count': len(record.snapshot['excluded_activities']),
@@ -223,23 +235,23 @@ def confirm_start(assessment_id: UUID, body: StartConfirmation, request: Request
                          .where(AssessmentStartAuthorization.assessment_id == assessment_id))
     if previous is not None and previous.idempotency_key == idempotency_key:
         if previous.actor_id != user.id or not hmac.compare_digest(previous.request_fingerprint, request_fingerprint):
-            return start_conflict('start_idempotency_conflict')
-        receipt = start_receipt(previous)
+            return start_conflict('start_idempotency_conflict', user.id, assessment_id)
+        receipt = start_receipt(previous, queued_requests(db, previous.id))
         db.commit()
         response.status_code = 200
         return receipt
     if assessment.status != 'Draft' or previous is not None:
-        return start_conflict('start_lifecycle_conflict')
+        return start_conflict('start_lifecycle_conflict', user.id, assessment_id)
 
     key = signing_key(settings)
     if not key:
-        return start_conflict('start_signing_unavailable')
+        return start_conflict('start_signing_unavailable', user.id, assessment_id)
     claims = verify_review_token(body.review_token, key, session_token, assessment_id, user.id, body.mode)
     if claims is None:
-        return start_conflict('start_review_invalid')
+        return start_conflict('start_review_invalid', user.id, assessment_id)
     expiry = datetime.fromisoformat(claims['expires_at'])
     if expiry <= datetime.now(timezone.utc):
-        return start_conflict('start_review_expired')
+        return start_conflict('start_review_expired', user.id, assessment_id)
 
     # Covers existing rows and first-time tool insertion. The maintenance
     # command commits its tool write before it takes any assessment locks.
@@ -251,23 +263,25 @@ def confirm_start(assessment_id: UUID, body: StartConfirmation, request: Request
         'execution_policy_versions, '
         'execution_policy_approvals, '
         'assessment_start_evidence, '
-        'authorization_record_revocations IN SHARE MODE'
+        'authorization_record_revocations, '
+        'system_policy_authorizations, '
+        'system_policy_authorization_revocations IN SHARE MODE'
     ))
     snapshot = snapshot_for(evaluate_readiness(db, assessment))
     snapshot_digest = fingerprint(snapshot)
 
     # Reject confirmations based on an outdated assessment snapshot.
     if not hmac.compare_digest(snapshot_digest, claims['digest']):
-        return start_conflict('start_review_stale')
+        return start_conflict('start_review_stale', user.id, assessment_id)
 
     if not snapshot['mode']:
-        return start_conflict('start_no_eligible_activities')
+        return start_conflict('start_no_eligible_activities', user.id, assessment_id)
 
     if snapshot['mode'] != body.mode:
-        return start_conflict('start_review_stale')
+        return start_conflict('start_review_stale', user.id, assessment_id)
     now = datetime.now(timezone.utc)
     if expiry <= now:
-        return start_conflict('start_review_expired')
+        return start_conflict('start_review_expired', user.id, assessment_id)
     if session.expires_at <= now:
         raise HTTPException(401)
 
@@ -280,11 +294,16 @@ def confirm_start(assessment_id: UUID, body: StartConfirmation, request: Request
         db.add(record)
         db.flush()
         db.add(AssessmentStartEvent(authorization_id=record.id, occurred_at=now,
-                                    from_status='Draft', to_status='Ready'))
-        assessment.status = 'Ready'
-        receipt = start_receipt(record)
+                                    from_status='Draft', to_status='Testing'))
+        requests = queue_baselines(db, record)
+        assessment.status = 'Testing'
+        receipt = start_receipt(record, requests)
         db.commit()
     except SQLAlchemyError:
         db.rollback()
         raise
+    logging.getLogger('uptip.assessment').info(
+        'start_accepted actor=%s assessment=%s authorization=%s queued=%s',
+        user.id, assessment_id, record.id, len(requests),
+    )
     return receipt

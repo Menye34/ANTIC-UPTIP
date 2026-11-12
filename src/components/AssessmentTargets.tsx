@@ -6,7 +6,7 @@ import {
   confirmAssessmentStart,
   AssessmentStartError,
 } from '../services/assessmentStart'
-import type { AssessmentReadiness } from '../services/assessmentStart'
+import type { AssessmentReadiness, StartReceipt } from '../services/assessmentStart'
 import type { Target } from '../services/targets'
 import draftIcon from '../assets/assessment/target-draft.svg'
 import { ScopeError, scopeInputError } from '../services/scope'
@@ -39,17 +39,14 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   const [startOpen, setStartOpen] = useState(false)
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState('')
-  const [startReceipt, setStartReceipt] = useState<{
-    lifecycle_status: string
-    authorized_activity_count: number
-    execution_authorized: boolean
-  }>()
+  const [startReceipt, setStartReceipt] = useState<StartReceipt>()
   const field = useRef<HTMLInputElement>(null)
   const dialog = useRef<HTMLDialogElement>(null)
   const startDialog = useRef<HTMLDialogElement>(null)
   const startPending = useRef<AbortController | null>(null)
   const startAttemptKey = useRef<string | null>(null)
-  const startOutcomeUnknown = useRef(false)
+  const [startOutcomeUnknown, setStartOutcomeUnknown] = useState(false)
+  const [reviewExpired, setReviewExpired] = useState(false)
   const pending = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -72,12 +69,14 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
     if (!data) return
 
     const controller = new AbortController()
-    setReadiness(undefined)
-    setReadinessError('')
-
-    getAssessmentReadiness(id, controller.signal)
+    Promise.resolve().then(() => {
+      if (controller.signal.aborted) return undefined
+      setReadiness(undefined)
+      setReadinessError('')
+      return getAssessmentReadiness(id, controller.signal)
+    })
       .then(result => {
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted || !result) return
 
         const review = result?.start_review
         if (
@@ -96,6 +95,8 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
           return
         }
 
+        const expires = review.expires_at === null ? null : Date.parse(review.expires_at)
+        setReviewExpired(expires !== null && (!Number.isFinite(expires) || expires <= Date.now()))
         setReadiness(result)
       })
       .catch((failure: unknown) => {
@@ -127,6 +128,15 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       startDialog.current.close()
     }
   }, [startOpen])
+
+  useEffect(() => {
+    const expiry = readiness?.start_review.expires_at
+    if (!expiry) return
+    const expires = Date.parse(expiry)
+    if (!Number.isFinite(expires)) return
+    const timer = window.setTimeout(() => setReviewExpired(true), Math.max(0, expires - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [readiness])
 
   function closeRemoval() {
     dialog.current?.close()
@@ -174,13 +184,22 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
 
   async function confirmStart() {
     const review = readiness?.start_review
+    if (review?.expires_at) {
+      const expires = Date.parse(review.expires_at)
+      if (!Number.isFinite(expires) || expires <= Date.now()) {
+        setStartOpen(false)
+        setStartError('The assessment review has expired. Refresh readiness before retrying.')
+        setReadinessAttempt(n => n + 1)
+        return
+      }
+    }
     if (
       !review?.confirmation_possible ||
       !review.review_token ||
       !review.mode ||
       starting ||
       startPending.current ||
-      startOutcomeUnknown.current
+      startOutcomeUnknown
     ) return
 
     const controller = new AbortController()
@@ -224,7 +243,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
           return
         }
       }
-      startOutcomeUnknown.current = true
+      setStartOutcomeUnknown(true)
       setStartOpen(false)
       setStartError(
         'The confirmation outcome is unknown. Reload the assessment and verify its status before attempting Start again.',
@@ -377,11 +396,11 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
         )}
         {startReceipt && (
           <div className="scope-success" role="status">
-            <strong>Assessment Ready</strong>
+            <strong>{startReceipt.lifecycle_status === 'Testing' ? 'Assessment Testing' : 'Assessment Ready'}</strong>
             <p>
-              {startReceipt.authorized_activity_count} activities
-              included in Start authorization.
-              Scanner execution remains unauthorized.
+              {startReceipt.lifecycle_status === 'Testing'
+                ? `${startReceipt.queued_execution_count} baseline activities queued. Scanner dispatch requires separate checks.`
+                : `${startReceipt.authorized_activity_count} activities included in the earlier Start authorization.`}
             </p>
           </div>
         )}
@@ -398,12 +417,11 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
               busy ||
               starting ||
               Boolean(startReceipt) ||
-              startOutcomeUnknown.current ||
+              startOutcomeUnknown ||
               !readiness?.start_review.confirmation_possible ||
               !readiness.start_review.review_token ||
               !readiness.start_review.mode ||
-              (readiness.start_review.expires_at !== null &&
-                Date.parse(readiness.start_review.expires_at) <= Date.now())
+              reviewExpired
             }
             onClick={() => {
               setStartError('')
@@ -481,7 +499,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
 
       <p>
         <strong>
-          This confirmation changes the assessment to Ready.
+          This confirmation starts Testing and queues eligible baseline activities.
           It does not execute security scanners.
         </strong>
       </p>

@@ -42,7 +42,12 @@ export interface AssessmentReadiness {
 export interface StartReceipt {
   authorization_id: string
   assessment_id: string
-  lifecycle_status: 'Ready'
+  lifecycle_status: 'Ready' | 'Testing'
+  queued_execution_count: number
+  queued_execution_ids: string[]
+  testing_url: string
+  excluded_activities: StartActivity[]
+  excluded_targets: StartExcludedTarget[]
   mode: StartMode
   confirmed_at: string
   execution_authorized: false
@@ -109,7 +114,7 @@ export function getAssessmentReadiness(
   )
 }
 
-export function confirmAssessmentStart(
+export async function confirmAssessmentStart(
   assessmentId: string,
   csrfToken: string,
   review: StartReview,
@@ -124,7 +129,7 @@ export function confirmAssessmentStart(
     throw new Error('Start Assessment confirmation is unavailable.')
   }
 
-  return startRequest<StartReceipt>(
+  const receipt = await startRequest<StartReceipt>(
     assessmentId,
     '/start',
     signal,
@@ -142,4 +147,19 @@ export function confirmAssessmentStart(
       }),
     },
   )
+  if (receipt.assessment_id !== assessmentId ||
+      !['Ready', 'Testing'].includes(receipt.lifecycle_status) ||
+      receipt.execution_authorized !== false ||
+      !Number.isInteger(receipt.queued_execution_count) ||
+      receipt.queued_execution_count < 0 ||
+      !Array.isArray(receipt.queued_execution_ids) ||
+      receipt.queued_execution_ids.length !== receipt.queued_execution_count) {
+    throw new Error('Invalid Start confirmation receipt.')
+  }
+  return receipt
+}
+
+// AssessmentPage does not yet implement the approved Testing view.
+export function assessmentTestingPath(assessmentId: string) {
+  return '/analyst/assessments/' + encodeURIComponent(assessmentId) + '/testing'
 }
