@@ -371,11 +371,55 @@ describe('Assessment Targets', () => {
       kind: 'IP address', scope_status: 'in_scope', eligibility: 'pending', revision: 1 }
     const populated = { ...empty, targets: [target], counts: { total: 1, eligible: 0, blocked: 0 } }
     const updated = { ...target, normalized_value: '192.0.2.5', scope_status: 'out_of_scope', eligibility: 'blocked', revision: 2 }
-    const fetcher = vi.fn().mockResolvedValueOnce(response(empty))
-      .mockResolvedValueOnce(response(populated, 201))
-      .mockResolvedValueOnce(response({ code: 'duplicate_entry' }, 409))
-      .mockResolvedValueOnce(response({ ...populated, targets: [updated], counts: { total: 1, eligible: 0, blocked: 1 } }))
-      .mockResolvedValueOnce(response(empty))
+    const targetResponses = [
+      response(empty),
+      response(populated, 201),
+      response({ code: 'duplicate_entry' }, 409),
+      response({
+        ...populated,
+        targets: [updated],
+        counts: { total: 1, eligible: 0, blocked: 1 },
+      }),
+      response(empty),
+    ]
+
+    let targetRequestCount = 0
+
+    const blockedReadiness = {
+      assessment_id: assessment.id,
+      lifecycle_status: 'Draft',
+      start_review_eligible: false,
+      reasons: [],
+      targets: [],
+      start_review: {
+        mode: null,
+        confirmation_possible: false,
+        review_token: null,
+        expires_at: null,
+        eligible_activities: [],
+        excluded_activities: [],
+        excluded_targets: [],
+      },
+    }
+
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+
+      if (url.endsWith('/readiness')) {
+        return response(blockedReadiness)
+      }
+
+      if (url.includes('/targets')) {
+        const result = targetResponses[targetRequestCount++]
+        if (!result) {
+          throw new Error('Unexpected target API request: ' + url)
+        }
+        return result
+      }
+
+      throw new Error('Unexpected API request: ' + url)
+    })
+
     vi.stubGlobal('fetch', fetcher)
     renderPage(draftPath + '/targets')
     expect(await screen.findByText('No targets added. Add a target to begin system preparation.')).toBeVisible()
@@ -386,7 +430,7 @@ describe('Assessment Targets', () => {
     fireEvent.change(field, { target: { value: '999.0.0.1' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add Target' }))
     expect(field).toHaveAttribute('aria-invalid', 'true')
-    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(targetRequestCount).toBe(1)
     fireEvent.change(field, { target: { value: target.original_value } })
     fireEvent.click(screen.getByRole('button', { name: 'Add Target' }))
     expect(await screen.findByText('In scope')).toBeVisible()

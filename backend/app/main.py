@@ -43,7 +43,10 @@ def create_app():
 
     @app.exception_handler(SQLAlchemyError)
     async def database_error(request, exc):
-        logging.getLogger('uptip.auth').error('authentication_database_unavailable')
+        logging.getLogger('uptip.auth').exception(
+            'database_operation_failed endpoint=%s',
+            request.url.path,
+        )
         return reply(503, 'unavailable', 'Sign-in is temporarily unavailable. Please try again.')
 
     return app

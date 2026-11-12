@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', extra='ignore', env_prefix='UPTIP_', hide_input_in_errors=True)
     database_url: str
+    migration_database_url: str | None = None
     environment: str = 'production'
     public_origin: str = 'https://localhost'
     cookie_secure: bool = True

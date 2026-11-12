@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { requestTargets } from '../services/targets'
+import {
+  getAssessmentReadiness,
+  confirmAssessmentStart,
+  AssessmentStartError,
+} from '../services/assessmentStart'
+import type { AssessmentReadiness } from '../services/assessmentStart'
 import type { Target } from '../services/targets'
 import draftIcon from '../assets/assessment/target-draft.svg'
 import { ScopeError, scopeInputError } from '../services/scope'
@@ -27,8 +33,23 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   const [removing, setRemoving] = useState<Target>()
   const [attempt, setAttempt] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [readiness, setReadiness] = useState<AssessmentReadiness>()
+  const [readinessError, setReadinessError] = useState('')
+  const [readinessAttempt, setReadinessAttempt] = useState(0)
+  const [startOpen, setStartOpen] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState('')
+  const [startReceipt, setStartReceipt] = useState<{
+    lifecycle_status: string
+    authorized_activity_count: number
+    execution_authorized: boolean
+  }>()
   const field = useRef<HTMLInputElement>(null)
   const dialog = useRef<HTMLDialogElement>(null)
+  const startDialog = useRef<HTMLDialogElement>(null)
+  const startPending = useRef<AbortController | null>(null)
+  const startAttemptKey = useRef<string | null>(null)
+  const startOutcomeUnknown = useRef(false)
   const pending = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -42,10 +63,70 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
     })
     return () => controller.abort()
   }, [id, attempt, onExpired])
-  useEffect(() => () => pending.current?.abort(), [])
+  useEffect(() => () => {
+    pending.current?.abort()
+    startPending.current?.abort()
+  }, [])
+
+  useEffect(() => {
+    if (!data) return
+
+    const controller = new AbortController()
+    setReadiness(undefined)
+    setReadinessError('')
+
+    getAssessmentReadiness(id, controller.signal)
+      .then(result => {
+        if (controller.signal.aborted) return
+
+        const review = result?.start_review
+        if (
+          !review ||
+          !Array.isArray(review.eligible_activities) ||
+          !Array.isArray(review.excluded_activities) ||
+          !Array.isArray(review.excluded_targets) ||
+          typeof review.confirmation_possible !== 'boolean' ||
+          !['full', 'partial', null].includes(review.mode) ||
+          (review.confirmation_possible &&
+            (!review.review_token || !review.mode))
+        ) {
+          setReadinessError(
+            'Unable to verify assessment readiness. Retry the check.',
+          )
+          return
+        }
+
+        setReadiness(result)
+      })
+      .catch((failure: unknown) => {
+        if (controller.signal.aborted) return
+
+        if (
+          failure instanceof AssessmentStartError &&
+          failure.status === 401
+        ) {
+          onExpired()
+        } else {
+          setReadinessError(
+            'Unable to verify assessment readiness. Retry the check.',
+          )
+        }
+      })
+
+    return () => controller.abort()
+  }, [id, data, readinessAttempt, onExpired])
   useEffect(() => {
     if (removing && !dialog.current?.open) dialog.current?.showModal()
   }, [removing])
+
+  useEffect(() => {
+    if (startOpen && !startDialog.current?.open) {
+      startDialog.current?.showModal()
+    }
+    if (!startOpen && startDialog.current?.open) {
+      startDialog.current.close()
+    }
+  }, [startOpen])
 
   function closeRemoval() {
     dialog.current?.close()
@@ -62,6 +143,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       const result = await requestTargets(id, csrfToken, controller.signal, change)
       if (controller.signal.aborted) return
       setData(result)
+      setReadiness(undefined)
       setValue('')
       setEditing(undefined)
       closeRemoval()
@@ -86,6 +168,71 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       if (!controller.signal.aborted) {
         pending.current = null
         setBusy(false)
+      }
+    }
+  }
+
+  async function confirmStart() {
+    const review = readiness?.start_review
+    if (
+      !review?.confirmation_possible ||
+      !review.review_token ||
+      !review.mode ||
+      starting ||
+      startPending.current ||
+      startOutcomeUnknown.current
+    ) return
+
+    const controller = new AbortController()
+    startPending.current = controller
+    startAttemptKey.current ??= crypto.randomUUID()
+    setStarting(true)
+    setStartError('')
+
+    try {
+      const receipt = await confirmAssessmentStart(
+        id,
+        csrfToken,
+        review,
+        startAttemptKey.current,
+        controller.signal,
+      )
+      if (controller.signal.aborted) return
+
+      setStartReceipt(receipt)
+      startAttemptKey.current = null
+      setStartOpen(false)
+      setReadiness(undefined)
+      setReadinessAttempt(n => n + 1)
+      setAttempt(n => n + 1)
+    } catch (failure) {
+      if (controller.signal.aborted) return
+
+      if (failure instanceof AssessmentStartError) {
+        if (failure.status === 401) {
+          onExpired()
+          return
+        }
+        if (failure.status === 409) {
+          startAttemptKey.current = null
+          setStartOpen(false)
+          setReadiness(undefined)
+          setStartError(
+            'The assessment review is no longer valid. Refresh readiness before retrying.',
+          )
+          setReadinessAttempt(n => n + 1)
+          return
+        }
+      }
+      startOutcomeUnknown.current = true
+      setStartOpen(false)
+      setStartError(
+        'The confirmation outcome is unknown. Reload the assessment and verify its status before attempting Start again.',
+      )
+    } finally {
+      if (!controller.signal.aborted) {
+        startPending.current = null
+        setStarting(false)
       }
     }
   }
@@ -171,13 +318,199 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
           <div><dt>Eligible targets</dt><dd>{data.counts.eligible}</dd></div>
           <div><dt>Blocked targets</dt><dd>{data.counts.blocked}</dd></div>
         </dl>
-        <h3>Prepared testing activities</h3><p>No activities ready for execution.</p>
-        <h3>Applicable restrictions</h3><p>Testing is unavailable until current validation identifies eligible targets.</p>
-        <p><strong>Start blocked — resolve target or baseline issues and revalidate.</strong></p>
-        <div className="target-start"><button className="analyst-create" disabled>Start Assessment</button>
-          <small>Explicit analyst authorization and final checks are required.</small></div>
+        <h3>Prepared testing activities</h3>
+        {!readiness && !readinessError && (
+          <p role="status">Checking assessment readiness…</p>
+        )}
+        {readiness && (
+          <p>
+            {readiness.start_review.eligible_activities.length}
+            {' '}activities eligible for Start authorization.
+          </p>
+        )}
+
+        <h3>Applicable restrictions</h3>
+        {readiness && (
+          <p>
+            {readiness.start_review.excluded_activities.length}
+            {' '}excluded activities and{' '}
+            {readiness.start_review.excluded_targets.length}
+            {' '}excluded targets.
+          </p>
+        )}
+
+        {readiness && !readiness.start_review.confirmation_possible && (
+          <div role="status">
+            <strong>Start Assessment is currently blocked.</strong>
+
+            {readiness.start_review.excluded_activities.length > 0 && (
+              <ul>
+                {readiness.start_review.excluded_activities.map(activity => (
+                  <li key={`${activity.target_id}:${activity.profile_id}`}>
+                    {activity.activity || activity.profile_id}: {' '}
+                    {activity.exclusion_code || 'Authorization requirements not satisfied'}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {readiness.start_review.excluded_activities.length === 0 && (
+              <p>
+                No activities are currently authorized for Start confirmation,
+                or the required confirmation credentials are unavailable.
+              </p>
+            )}
+          </div>
+        )}
+
+        {readinessError && (
+          <div role="alert">
+            <p>{readinessError}</p>
+            <button
+              type="button"
+              className="analyst-link"
+              onClick={() => setReadinessAttempt(n => n + 1)}
+            >
+              Retry readiness check
+            </button>
+          </div>
+        )}
+        {startReceipt && (
+          <div className="scope-success" role="status">
+            <strong>Assessment Ready</strong>
+            <p>
+              {startReceipt.authorized_activity_count} activities
+              included in Start authorization.
+              Scanner execution remains unauthorized.
+            </p>
+          </div>
+        )}
+
+        {startError && (
+          <p role="alert">{startError}</p>
+        )}
+
+        <div className="target-start">
+          <button
+            type="button"
+            className="analyst-create"
+            disabled={
+              busy ||
+              starting ||
+              Boolean(startReceipt) ||
+              startOutcomeUnknown.current ||
+              !readiness?.start_review.confirmation_possible ||
+              !readiness.start_review.review_token ||
+              !readiness.start_review.mode ||
+              (readiness.start_review.expires_at !== null &&
+                Date.parse(readiness.start_review.expires_at) <= Date.now())
+            }
+            onClick={() => {
+              setStartError('')
+              setStartOpen(true)
+            }}
+          >
+            Start Assessment
+          </button>
+          <small>
+            Explicit analyst authorization and final checks are required.
+          </small>
+        </div>
       </section>
     </>}
+    <dialog
+      ref={startDialog}
+      aria-labelledby="start-assessment-title"
+      onCancel={event => {
+        event.preventDefault()
+        if (!starting) setStartOpen(false)
+      }}
+    >
+      <h2 id="start-assessment-title">Confirm Start Assessment</h2>
+      <p>
+        Review the prepared activities and restrictions before
+        confirming the assessment.
+      </p>
+
+      {readiness?.start_review && (
+        <>
+          <p>
+            <strong>Authorization mode:</strong>{' '}
+            {readiness.start_review.mode === 'partial'
+              ? 'Partial'
+              : 'Full'}
+          </p>
+
+          <h3>Included activities</h3>
+          <ul>
+            {readiness.start_review.eligible_activities.map(activity => (
+              <li key={activity.target_id + ':' + activity.profile_id}>
+                {activity.tool || 'Security tool'} —{' '}
+                {activity.activity || activity.profile_id}
+              </li>
+            ))}
+          </ul>
+
+          <h3>Excluded activities</h3>
+          {readiness.start_review.excluded_activities.length ? (
+            <ul>
+              {readiness.start_review.excluded_activities.map(activity => (
+                <li key={activity.target_id + ':' + activity.profile_id}>
+                  {activity.activity || activity.profile_id}
+                  {' — '}
+                  {activity.exclusion_code || 'Not eligible'}
+                </li>
+              ))}
+            </ul>
+          ) : <p>None</p>}
+
+          <h3>Excluded targets</h3>
+          {readiness.start_review.excluded_targets.length ? (
+            <ul>
+              {readiness.start_review.excluded_targets.map(target => (
+                <li key={target.target_id}>
+                  {target.target_id}
+                  {' — '}
+                  {target.reasons.map(reason => reason.message).join('; ')}
+                </li>
+              ))}
+            </ul>
+          ) : <p>None</p>}
+        </>
+      )}
+
+      <p>
+        <strong>
+          This confirmation changes the assessment to Ready.
+          It does not execute security scanners.
+        </strong>
+      </p>
+
+      <div className="scope-dialog-actions">
+        <button
+          type="button"
+          className="scope-secondary"
+          disabled={starting}
+          onClick={() => setStartOpen(false)}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="analyst-create"
+          disabled={
+            starting ||
+            !readiness?.start_review.confirmation_possible ||
+            !readiness.start_review.review_token ||
+            !readiness.start_review.mode
+          }
+          onClick={() => void confirmStart()}
+        >
+          {starting ? 'Confirming…' : 'Confirm Start Assessment'}
+        </button>
+      </div>
+    </dialog>
+
     {removing && <dialog ref={dialog} aria-labelledby="remove-target-title" onCancel={event => {
       event.preventDefault()
       if (!busy) closeRemoval()

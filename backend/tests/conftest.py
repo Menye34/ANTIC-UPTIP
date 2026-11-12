@@ -29,9 +29,9 @@ def engine(database_url):
         url = make_url(database_url)
     except (SQLAlchemyError, ValueError):
         pytest.fail('Invalid UPTIP_TEST_DATABASE_URL.', pytrace=False)
-    if (url.drivername != 'postgresql+psycopg' or url.database != 'uptip_test'
+    if (url.drivername != 'postgresql+psycopg' or url.database != 'uptip_test_readiness_fix'
             or url.host not in {'127.0.0.1', '::1'} or url.query):
-        pytest.fail('Use a local PostgreSQL database named uptip_test with no URL query options.',
+        pytest.fail('Use the dedicated local PostgreSQL database uptip_test_readiness_fix with no URL query options.',
                     pytrace=False)
 
     engine = create_engine(url, hide_parameters=True)
@@ -45,21 +45,21 @@ def engine(database_url):
                 """)).one_or_none()
         except SQLAlchemyError:
             pytest.fail('Could not verify the disposable PostgreSQL test database.', pytrace=False)
-        if identity != ('uptip_test', 'UPTIP disposable test database'):
+        if identity != ('uptip_test_readiness_fix', 'UPTIP disposable integration test database'):
             pytest.fail(
                 "After creating a dedicated disposable database, run "
-                "COMMENT ON DATABASE uptip_test IS 'UPTIP disposable test database';",
+                "COMMENT ON DATABASE uptip_test_readiness_fix IS 'UPTIP disposable integration test database';",
                 pytrace=False,
             )
 
-        os.environ.update(UPTIP_DATABASE_URL=database_url, UPTIP_ENVIRONMENT='test',
+        os.environ.update(UPTIP_ENVIRONMENT='test',
                           UPTIP_PUBLIC_ORIGIN='https://testserver', UPTIP_COOKIE_SECURE='true',
                           UPTIP_RATE_KEY='test-only-not-a-deployment-secret-123456')
         from app.config import get_settings
         get_settings.cache_clear()
         config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
-        command.downgrade(config, 'base')
-        command.upgrade(config, 'head')
+        # The dedicated integration-test database is migrated separately.
+        # Never reset its schema automatically during pytest execution.
         yield engine
     finally:
         engine.dispose()
@@ -67,11 +67,19 @@ def engine(database_url):
 
 @pytest.fixture
 def db(engine):
-    with engine.begin() as conn:
-        conn.execute(text('TRUNCATE auth_events, auth_sessions, login_buckets, users, roles CASCADE'))
-        conn.execute(text('TRUNCATE baseline_tool_states, baseline_evaluations CASCADE'))
-    with sessionmaker(engine, expire_on_commit=False)() as session:
-        yield session
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            factory = sessionmaker(
+                bind=connection,
+                expire_on_commit=False,
+                join_transaction_mode='create_savepoint',
+            )
+            with factory() as session:
+                yield session
+        finally:
+            if transaction.is_active:
+                transaction.rollback()
 
 
 @pytest.fixture

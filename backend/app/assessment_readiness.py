@@ -7,7 +7,9 @@ from sqlalchemy import select
 
 from .baseline_catalog import fingerprint
 from .baseline_resolution import baseline_view, current_assignments, tool_states
-from .execution_policy import ActivityContext, decision, effective_policy, evaluate_activity
+from .authorization_provider import load_trusted_policy
+from .system_safety_verifier import verify_nmap_discovery
+from .execution_policy import ActivityContext, decision, evaluate_activity
 from .models import AssessmentTarget
 from .target_scope import classify, scope_entries
 
@@ -38,12 +40,15 @@ class StartEvidence:
     prerequisite_completions: tuple[PrerequisiteCompletion, ...] = ()
 
 
-def trusted_start_evidence(assessment_id, target_id, evaluation_fingerprint, policy_digest):
-    """Reserved for immutable evidence bound to these inputs.
+def trusted_start_evidence(db, assessment_id, target_id, evaluation_id,
+                           evaluation_fingerprint, policy_digest, approval_reference):
+    """Retrieve persisted evidence bound to the exact approved assessment state."""
+    from .start_evidence_provider import load_trusted_start_evidence
 
-    A future mutable provider must participate in the Start transaction's locks.
-    """
-    return None
+    return load_trusted_start_evidence(
+        db, assessment_id, target_id, evaluation_id,
+        evaluation_fingerprint, policy_digest, approval_reference,
+    )
 
 
 def reason(code, message):
@@ -66,10 +71,10 @@ def evaluate_readiness(db, assessment):
     if not targets:
         reasons.append(reason('no_targets', 'The assessment has no targets.'))
 
-    policy = effective_policy()
+    policy = load_trusted_policy(db)
     policy_reason = reason(policy.code, policy.message)
     authorization_reason = reason('authorization_checks_unavailable', 'Execution dispatch authorization is unavailable.')
-    if policy.status != 'approved':
+    if policy.status not in ('approved', 'configured'):
         reasons.append(policy_reason)
     reasons.append(authorization_reason)
     results = []
@@ -120,7 +125,9 @@ def evaluate_readiness(db, assessment):
                 profile = evaluation.decision.get('profile', {})
                 if policy.status == 'approved':
                     evidence = trusted_start_evidence(
-                        assessment.id, target.id, evaluation.fingerprint, policy.definition.digest,
+                        db, assessment.id, target.id, evaluation.id,
+                        evaluation.fingerprint, policy.definition.digest,
+                        policy.approval.reference,
                     )
                     if evidence and (not evidence.reference or evidence.expires_at.tzinfo is None
                                      or evidence.expires_at <= now):
@@ -138,6 +145,29 @@ def evaluate_readiness(db, assessment):
                     clear_stop_conditions=evidence.clear_stop_conditions if evidence else frozenset(),
                 ))
             profile = evaluation.decision.get('profile', {}) if evaluation else {}
+            activity['system_safety_verification'] = None
+            if (
+                policy.status == 'configured'
+                and activity['status'] == 'resolved'
+                and activity['tool'] == 'Nmap'
+                and activity['profile_id'] == 'network-discovery'
+            ):
+                verification = verify_nmap_discovery(
+                    in_scope=scope_status == 'in_scope',
+                    baseline_current=True,
+                    tool_capable=(
+                        profile.get('capability')
+                        in evaluation.decision.get('tool_capabilities', [])
+                    ),
+                    target_kind=target.kind,
+                    profile_id=activity['profile_id'],
+                    profile_version=activity['version'],
+                )
+                activity['system_safety_verification'] = {
+                    'passed': verification.passed,
+                    'checks': list(verification.checks),
+                    'pending': list(verification.pending),
+                }
             activity['profile_digest'] = profile.get('digest')
             activity['required_capability'] = profile.get('capability')
             activity['safety_evidence'] = None
@@ -175,20 +205,40 @@ def evaluate_readiness(db, assessment):
             activity['evaluation_fingerprint'] = evaluation.fingerprint if evaluation else None
         if assessment.status != 'Draft':
             target_reasons.append(reasons[0])
+        target_eligible = (
+            assessment.status == 'Draft'
+            and scope_status == 'in_scope'
+            and any(activity['start_review_eligible'] for activity in activities)
+        )
         results.append({
             'target_id': target.id, 'value': target.normalized_value, 'kind': target.kind,
-            'scope_status': scope_status, 'target_revision': target.revision, 'state': 'blocked', 'eligible': False,
-            'start_review_eligible': any(activity['start_review_eligible'] for activity in activities),
+            'scope_status': scope_status, 'target_revision': target.revision,
+            'state': 'eligible' if target_eligible else 'blocked',
+            'eligible': target_eligible,
+            'start_review_eligible': target_eligible,
             'execution_authorized': False,
             'baseline_summary': summary, 'baseline_activities': activities,
-            'reasons': [*target_reasons, *([policy_reason] if policy.status != 'approved' else []), authorization_reason],
+            'reasons': (
+                target_reasons
+                + ([policy_reason] if policy.status not in ('approved', 'configured') else [])
+                + ([] if target_eligible else [authorization_reason])
+            ),
         })
 
     return {
         'assessment_id': assessment.id, 'lifecycle_status': assessment.status,
         'scope_revision': assessment.scope_revision, 'scope_digest': fingerprint(sorted(map(list, boundaries))),
-        'state': 'blocked', 'reasons': reasons,
-        'counts': {'total': len(results), 'eligible': 0, 'blocked_or_excluded': len(results)},
+        'state': (
+            'eligible' if results and all(t['eligible'] for t in results)
+            else 'partial' if any(t['eligible'] for t in results)
+            else 'blocked'
+        ),
+        'reasons': reasons,
+        'counts': {
+            'total': len(results),
+            'eligible': sum(1 for t in results if t['eligible']),
+            'blocked_or_excluded': sum(1 for t in results if not t['eligible']),
+        },
         'policy': policy.public_view(),
         'policy_approval': {
             'reference': policy.approval.reference,

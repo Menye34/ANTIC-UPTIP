@@ -294,3 +294,9 @@ def validate_policy_version(mapper, connection, record):
     policy = PolicyDefinition.model_validate_json(json.dumps(record.definition))
     if (record.policy_id, record.version, record.digest) != (policy.policy_id, policy.version, policy.digest):
         raise ValueError('Policy identity or digest does not match its definition.')
+
+# Register system-managed authorization models.
+from .system_authorization_models import (
+    SystemPolicyAuthorizationRecord,
+    SystemPolicyAuthorizationRevocation,
+)

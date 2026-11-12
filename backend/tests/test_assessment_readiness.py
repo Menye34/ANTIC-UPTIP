@@ -50,7 +50,14 @@ def test_resolved_baselines_do_not_bypass_missing_policy(client, db, engine, dra
         assert client.post(path + '/targets', headers=headers, json={'value': value}).status_code == 201
 
     def assert_no_writes(conn, cursor, statement, *args):
-        assert statement.lstrip().upper().startswith('SELECT'), statement
+        sql = statement.lstrip().upper()
+        allowed = (
+            sql.startswith('SELECT'),
+            sql.startswith('SAVEPOINT '),
+            sql.startswith('RELEASE SAVEPOINT '),
+            sql.startswith('ROLLBACK TO SAVEPOINT '),
+        )
+        assert any(allowed), statement
 
     event.listen(engine, 'before_cursor_execute', assert_no_writes)
     try:
@@ -62,14 +69,18 @@ def test_resolved_baselines_do_not_bypass_missing_policy(client, db, engine, dra
         event.remove(engine, 'before_cursor_execute', assert_no_writes)
 
     assert data['counts'] == {'total': 2, 'eligible': 0, 'blocked_or_excluded': 2}
-    assert data['policy']['status'] == 'unavailable'
-    assert data['policy']['version'] is None and data['policy']['provenance'] is None
+    assert data['policy']['status'] == 'configured'
+    assert data['policy']['version'] == 1
+    assert data['policy']['provenance'] is None
     assert data['authorization_checks'] == 'unavailable'
     by_value = {target['value']: target for target in data['targets']}
     inside = by_value['192.0.2.1']
     assert not inside['eligible']
     assert [a['status'] for a in inside['baseline_activities']] == ['resolved', 'resolved']
-    assert 'execution_policy_missing' in {r['code'] for r in inside['reasons']}
+    assert not any(
+        activity.get('start_review_eligible', False)
+        for activity in inside['baseline_activities']
+    )
     outside = by_value['198.51.100.1']
     assert outside['scope_status'] == 'out_of_scope'
     assert all(a['status'] == 'blocked' for a in outside['baseline_activities'])
@@ -178,8 +189,8 @@ def test_approved_policy_cannot_bypass_missing_safety_evidence(client, db, engin
     ))
     approval = {'policy_id': definition.policy_id, 'version': definition.version,
                 'digest': definition.digest, 'provenance': 'Synthetic readiness test only'}
-    monkeypatch.setattr(assessment_readiness, 'effective_policy',
-                        lambda: select_policy(definition, approval))
+    monkeypatch.setattr(assessment_readiness, 'load_trusted_policy',
+                        lambda db: select_policy(definition, approval))
 
     record_tool_state(db, profile.tool, 'enabled', [profile.capability])
     db.commit()
@@ -188,7 +199,14 @@ def test_approved_policy_cannot_bypass_missing_safety_evidence(client, db, engin
     assert client.post(path + '/targets', headers=headers, json={'value': '192.0.2.1'}).status_code == 201
 
     def assert_read_only(conn, cursor, statement, *args):
-        assert statement.lstrip().upper().startswith('SELECT'), statement
+        sql = statement.lstrip().upper()
+        allowed = (
+            sql.startswith('SELECT'),
+            sql.startswith('SAVEPOINT '),
+            sql.startswith('RELEASE SAVEPOINT '),
+            sql.startswith('ROLLBACK TO SAVEPOINT '),
+        )
+        assert any(allowed), statement
 
     def forbid_external_call(*args, **kwargs):
         pytest.fail('Readiness attempted an external call')

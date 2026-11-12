@@ -243,12 +243,27 @@ def confirm_start(assessment_id: UUID, body: StartConfirmation, request: Request
 
     # Covers existing rows and first-time tool insertion. The maintenance
     # command commits its tool write before it takes any assessment locks.
-    db.execute(text('LOCK TABLE baseline_tool_states IN SHARE MODE'))
+    # Keep governed authorization records stable until Start confirmation commits.
+    # SHARE locks conflict with concurrent INSERT operations that could revoke
+    # or replace the authorization state during readiness verification.
+    db.execute(text(
+        'LOCK TABLE baseline_tool_states, '
+        'execution_policy_versions, '
+        'execution_policy_approvals, '
+        'assessment_start_evidence, '
+        'authorization_record_revocations IN SHARE MODE'
+    ))
     snapshot = snapshot_for(evaluate_readiness(db, assessment))
+    snapshot_digest = fingerprint(snapshot)
+
+    # Reject confirmations based on an outdated assessment snapshot.
+    if not hmac.compare_digest(snapshot_digest, claims['digest']):
+        return start_conflict('start_review_stale')
+
     if not snapshot['mode']:
         return start_conflict('start_no_eligible_activities')
-    snapshot_digest = fingerprint(snapshot)
-    if snapshot['mode'] != body.mode or not hmac.compare_digest(snapshot_digest, claims['digest']):
+
+    if snapshot['mode'] != body.mode:
         return start_conflict('start_review_stale')
     now = datetime.now(timezone.utc)
     if expiry <= now:

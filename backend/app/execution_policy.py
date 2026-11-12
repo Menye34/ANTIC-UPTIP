@@ -150,7 +150,7 @@ def decision(code, message, rule=None, disposition='blocked'):
 
 
 def evaluate_activity(selection, context):
-    if selection.status != 'approved' or selection.definition is None:
+    if selection.status not in ('approved', 'configured') or selection.definition is None:
         return decision(selection.code, selection.message)
     if not context.in_scope or not context.baseline_current or not context.tool_capable:
         return decision('activity_safety_gate_failed', 'Current scope, baseline, and tool capability are required.')
