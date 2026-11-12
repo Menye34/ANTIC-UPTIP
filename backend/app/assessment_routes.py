@@ -258,15 +258,7 @@ def confirm_start(assessment_id: UUID, body: StartConfirmation, request: Request
     # Keep governed authorization records stable until Start confirmation commits.
     # SHARE locks conflict with concurrent INSERT operations that could revoke
     # or replace the authorization state during readiness verification.
-    db.execute(text(
-        'LOCK TABLE baseline_tool_states, '
-        'execution_policy_versions, '
-        'execution_policy_approvals, '
-        'assessment_start_evidence, '
-        'authorization_record_revocations, '
-        'system_policy_authorizations, '
-        'system_policy_authorization_revocations IN SHARE MODE'
-    ))
+    db.execute(text('SELECT public.lock_assessment_start_sources()'))
     snapshot = snapshot_for(evaluate_readiness(db, assessment))
     snapshot_digest = fingerprint(snapshot)
 
