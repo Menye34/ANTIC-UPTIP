@@ -14,9 +14,8 @@ from app.models import Assessment, AssessmentAssignment, AssessmentStartAuthoriz
 from test_assessments import API, add_analyst, sign_in
 
 
-@pytest.fixture
-def start_case(client, db, monkeypatch):
-    user = add_analyst(db, 'start-creator')
+def prepare_start_case(client, db, monkeypatch, authorization_db=None):
+    user = add_analyst(db, 'start-creator-' + uuid4().hex[:12])
     headers = sign_in(client, user.username)
     response = client.post(API, headers=headers, json={'name': 'Start test'})
     assert response.status_code == 201
@@ -60,24 +59,31 @@ def start_case(client, db, monkeypatch):
 
     now = datetime.now(timezone.utc)
 
-    db.add(ExecutionPolicyVersion(
+    if authorization_db is not None:
+        # Foreign-key parents must be committed before privileged inserts.
+        db.commit()
+        record_db = authorization_db
+    else:
+        record_db = db
+
+    record_db.add(ExecutionPolicyVersion(
         policy_id=definition.policy_id,
         version=definition.version,
         digest=definition.digest,
         definition=definition.model_dump(mode='json'),
     ))
-    db.flush()
+    record_db.flush()
 
-    db.add(ExecutionPolicyApprovalRecord(
+    record_db.add(ExecutionPolicyApprovalRecord(
         reference=approval['reference'],
         policy_digest=definition.digest,
         provenance=approval['provenance'],
         valid_from=now - timedelta(minutes=5),
         valid_until=now + timedelta(hours=1),
     ))
-    db.flush()
+    record_db.flush()
 
-    db.add(AssessmentStartEvidenceRecord(
+    record_db.add(AssessmentStartEvidenceRecord(
         reference=evidence.reference,
         assessment_id=assessment_id,
         target_id=target_id,
@@ -100,10 +106,34 @@ def start_case(client, db, monkeypatch):
             'prerequisite_completions': [],
         },
     ))
-    db.flush()
+    record_db.flush()
+    if authorization_db is not None:
+        record_db.commit()
     from pydantic import SecretStr
     monkeypatch.setattr(get_settings(), 'start_review_key', SecretStr('synthetic-test-signing-key-' + 'x' * 32))
     return path, headers, user, evidence, approval
+
+
+
+@pytest.fixture
+def start_case(client, db, monkeypatch):
+    return prepare_start_case(client, db, monkeypatch)
+
+
+
+@pytest.fixture
+def committed_start_case(committed_client, committed_db, monkeypatch):
+    """Prepare committed assessment data for concurrency tests."""
+    result = prepare_start_case(
+        committed_client,
+        committed_db,
+        monkeypatch,
+    )
+
+    # Publish policy, approval, and evidence records to other connections.
+    committed_db.commit()
+
+    return result
 
 
 def review(client, path):
@@ -264,8 +294,9 @@ def test_audit_failure_rolls_back_authorization_and_lifecycle(client, db, engine
     assert client.get(path).json()['status'] == 'Draft'
 
 
-@pytest.mark.skip(reason='Requires committed-data concurrency fixture; shared rollback fixture is not visible to independent connections')
-def test_concurrent_start_and_scope_edit(client, db, engine, start_case):
+def test_concurrent_start_and_scope_edit(
+    committed_client, committed_db, committed_start_case
+):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
@@ -275,11 +306,11 @@ def test_concurrent_start_and_scope_edit(client, db, engine, start_case):
     from app.database import get_db
     from app.main import create_app
 
-    path, headers, _, _, _ = start_case
-    body = confirmation(review(client, path))
-    cookies = dict(client.cookies)
-    db.rollback()  # Release the review lock held by the shared test session.
-    factory = sessionmaker(engine)
+    path, headers, _, _, _ = committed_start_case
+    body = confirmation(review(committed_client, path))
+    cookies = dict(committed_client.cookies)
+    committed_db.rollback()  # Release the review transaction.
+    factory = sessionmaker(committed_db.get_bind())
 
     def independent_db():
         with factory() as session:
@@ -303,11 +334,11 @@ def test_concurrent_start_and_scope_edit(client, db, engine, start_case):
         edit_status = edit.result(timeout=15).status_code
     if edit_status == 201:
         assert statuses == [409, 409]
-        assert db.scalar(select(func.count()).select_from(AssessmentStartAuthorization)) == 0
+        assert committed_db.scalar(select(func.count()).select_from(AssessmentStartAuthorization)) == 0
     else:
         assert edit_status == 403
         assert statuses == [200, 201]
-        assert db.scalar(select(func.count()).select_from(AssessmentStartEvent)) == 1
+        assert committed_db.scalar(select(func.count()).select_from(AssessmentStartEvent)) == 1
 
 
 def test_review_fails_closed_without_policy_evidence_or_signing_key(
@@ -357,59 +388,278 @@ def test_partial_start_with_independent_activities_on_same_target(client, db, st
     assert response.json()['excluded_activity_count'] == 1
 
 
-@pytest.mark.skip(reason='Requires isolated disposable migration-test database; must not downgrade the shared readiness-test database')
-def test_migration_preserves_draft_and_refuses_downgrade_after_start(client, db, engine, start_case):
+def test_migration_preserves_draft_and_refuses_downgrade_after_start(
+    migration_client, migration_db, monkeypatch
+):
     from pathlib import Path
 
     from alembic import command
     from alembic.config import Config
-    from sqlalchemy import text
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
     from sqlalchemy.exc import DBAPIError
 
-    path, headers, _, _, _ = start_case
-    import os
-    from sqlalchemy.engine import make_url
-
-    runtime_url = make_url(os.environ['UPTIP_TEST_DATABASE_URL'])
-    migration_url = make_url(os.environ['UPTIP_MIGRATION_DATABASE_URL'])
-
-    if (
-        runtime_url.database != 'uptip_test_readiness_fix'
-        or runtime_url.host not in ('127.0.0.1', '::1')
-        or migration_url.host != runtime_url.host
-        or migration_url.username == runtime_url.username
-    ):
-        pytest.fail('Unsafe migration test database configuration')
-
-    test_migration_url = migration_url.set(database=runtime_url.database)
-
     from app.config import get_settings
+    from app.database import get_db
+
+    # Restore the fixture's dependency override even if an assertion fails.
+    original_db_override = migration_client.app.dependency_overrides.get(
+        get_db
+    )
     settings = get_settings()
+    runtime_url = make_url(settings.database_url)
+    migration_url = make_url(settings.migration_database_url)
+
+    if not (
+        runtime_url.username == "uptip_runtime"
+        and migration_url.username == "uptip"
+        and runtime_url.database == migration_url.database == "uptip"
+        and runtime_url.host == migration_url.host == "127.0.0.1"
+        and runtime_url.drivername == migration_url.drivername
+        == "postgresql+psycopg"
+    ):
+        pytest.fail("Unsafe migration test configuration")
+
+    runtime_test_url = runtime_url.set(database="uptip_test_migration_0016")
+    migration_test_url = migration_url.set(database="uptip_test_migration_0016")
+
+    original_runtime_url = settings.database_url
     original_migration_url = settings.migration_database_url
-    original_database_url = settings.database_url
 
-    settings.migration_database_url = test_migration_url.render_as_string(
-        hide_password=False
+    engine = create_engine(runtime_test_url, hide_parameters=True)
+    migration_engine = create_engine(
+        migration_test_url, hide_parameters=True
     )
-    settings.database_url = runtime_url.render_as_string(
-        hide_password=False
-    )
+    config = None
 
-    config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
-    command.downgrade(config, '0008')
-    command.upgrade(config, 'head')
-    assert client.get(path).json()['status'] == 'Draft'
-    response = client.post(path + '/start', headers=headers, json=confirmation(review(client, path)))
-    assert response.status_code == 201
-    with pytest.raises(DBAPIError, match='Cannot downgrade'):
-        command.downgrade(config, '0008')
-    with engine.connect() as connection:
-        assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '0012'
-    with pytest.raises(DBAPIError, match='append-only'):
-        with engine.begin() as connection:
-            connection.execute(text('DELETE FROM assessment_start_authorizations'))
-    command.upgrade(config, 'head')
+    try:
+        with engine.connect() as connection:
+            identity = connection.execute(text("""
+                SELECT current_database(),
+                       shobj_description(oid, 'pg_database')
+                FROM pg_database
+                WHERE datname = current_database()
+            """)).one()
 
+            assert identity == (
+                "uptip_test_migration_0016",
+                "UPTIP disposable migration integration test database",
+            )
+
+            assert connection.scalar(
+                text("SELECT version_num FROM alembic_version")
+            ) == "0016"
+
+        # Refuse the initial downgrade if protected history already exists.
+        protected_tables = (
+            "assessment_start_authorizations",
+            "baseline_execution_requests",
+            "execution_policy_versions",
+            "execution_policy_approvals",
+            "assessment_start_evidence",
+            "authorization_record_revocations",
+            "system_policy_authorizations",
+            "system_policy_authorization_revocations",
+        )
+
+        with migration_engine.connect() as connection:
+            for table in protected_tables:
+                count = connection.scalar(
+                    text(f'SELECT count(*) FROM "{table}"')
+                )
+                assert count == 0, (
+                    f"Unsafe initial downgrade: {table} contains {count} records"
+                )
+
+            assert connection.scalar(
+                text("SELECT count(*) FROM assessments")
+            ) == 0, "Unsafe initial downgrade: assessments already exist"
+
+            assert connection.scalar(
+                text("SELECT count(*) FROM assessment_start_events")
+            ) == 0, "Unsafe initial downgrade: start events already exist"
+
+        settings.database_url = runtime_test_url.render_as_string(
+            hide_password=False
+        )
+        settings.migration_database_url = migration_test_url.render_as_string(
+            hide_password=False
+        )
+
+        config = Config(
+            str(Path(__file__).resolve().parents[1] / "alembic.ini")
+        )
+
+        # Create only a Draft assessment before the migration cycle.
+        draft_user = add_analyst(
+            migration_db, "migration-draft-" + uuid4().hex[:12]
+        )
+        draft_headers = sign_in(migration_client, draft_user.username)
+        draft_response = migration_client.post(
+            API,
+            headers=draft_headers,
+            json={"name": "Migration preservation test"},
+        )
+        assert draft_response.status_code == 201
+        draft_id = UUID(draft_response.json()["id"])
+        migration_db.commit()
+        migration_db.close()
+
+        command.downgrade(config, "0008")
+        command.upgrade(config, "head")
+
+        # Verify preservation through an independent database connection.
+        with engine.connect() as connection:
+            assert connection.scalar(
+                text("SELECT status FROM assessments WHERE id = :id"),
+                {"id": draft_id},
+            ) == "Draft"
+
+        # Use a fresh session after the schema migration cycle.
+        from sqlalchemy.orm import sessionmaker
+        from app.database import get_db
+
+        factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+        # Privileged preparation uses the dedicated migration engine.
+        with migration_engine.connect() as connection:
+            identity = connection.execute(text("""
+                SELECT current_database(),
+                       shobj_description(oid, 'pg_database')
+                FROM pg_database
+                WHERE datname = current_database()
+            """)).one()
+
+            assert identity == (
+                "uptip_test_migration_0016",
+                "UPTIP disposable migration integration test database",
+            )
+
+        authorization_factory = sessionmaker(
+            bind=migration_engine,
+            expire_on_commit=False,
+        )
+
+        with factory() as setup_session:
+            with authorization_factory() as authorization_session:
+                migration_client.app.dependency_overrides[get_db] = (
+                    lambda: setup_session
+                )
+                path, headers, _, _, _ = prepare_start_case(
+                    migration_client,
+                    setup_session,
+                    monkeypatch,
+                    authorization_db=authorization_session,
+                )
+                setup_session.commit()
+
+        def fresh_db():
+            with factory() as request_session:
+                yield request_session
+
+        with factory() as session:
+            app = migration_client.app
+            app.dependency_overrides[get_db] = lambda: session
+
+            try:
+                assert migration_client.get(path).json()["status"] == "Draft"
+
+                reviewed = review(migration_client, path)
+                response = migration_client.post(
+                    path + "/start",
+                    headers=headers,
+                    json=confirmation(reviewed),
+                )
+                assert response.status_code == 201
+                session.commit()
+                session.rollback()
+            finally:
+                app.dependency_overrides[get_db] = fresh_db
+
+        with pytest.raises(DBAPIError, match="Cannot downgrade"):
+            command.downgrade(config, "0008")
+
+        with engine.connect() as connection:
+            revision = connection.scalar(
+                text("SELECT version_num FROM alembic_version")
+            )
+            assert revision in {"0012", "0014", "0016"}, (
+                f"Unexpected revision after rejected downgrade: {revision}"
+            )
+
+        with migration_engine.connect() as connection:
+            authorization_count = connection.scalar(
+                text("SELECT count(*) FROM assessment_start_authorizations")
+            )
+            assert authorization_count > 0
+
+        # Use the migration role to verify the append-only trigger.
+        # This distinguishes trigger protection from runtime-role permissions.
+        with pytest.raises(DBAPIError, match="append-only"):
+            with migration_engine.begin() as connection:
+                assert connection.scalar(
+                    text("SELECT current_database()")
+                ) == "uptip_test_migration_0016"
+                connection.execute(
+                    text("DELETE FROM assessment_start_authorizations")
+                )
+
+        command.upgrade(config, "head")
+
+    finally:
+        try:
+            # Recover only the verified disposable migration database.
+            with engine.connect() as connection:
+                identity = connection.execute(text("""
+                    SELECT current_database(),
+                           shobj_description(oid, 'pg_database')
+                    FROM pg_database
+                    WHERE datname = current_database()
+                """)).one()
+
+                if identity != (
+                    "uptip_test_migration_0016",
+                    "UPTIP disposable migration integration test database",
+                ):
+                    raise RuntimeError(
+                        "Refusing migration recovery: database identity mismatch"
+                    )
+
+                revision = connection.scalar(
+                    text("SELECT version_num FROM alembic_version")
+                )
+
+            if revision != "0016":
+                if config is None:
+                    raise RuntimeError(
+                        "Cannot recover migration: Alembic configuration "
+                        "was not initialized"
+                    )
+
+                if (
+                    make_url(settings.database_url).database
+                    != "uptip_test_migration_0016"
+                    or make_url(settings.migration_database_url).database
+                    != "uptip_test_migration_0016"
+                ):
+                    raise RuntimeError(
+                        "Refusing migration recovery: unsafe configuration"
+                    )
+
+                command.upgrade(config, "head")
+
+        finally:
+            if original_db_override is None:
+                migration_client.app.dependency_overrides.pop(get_db, None)
+            else:
+                migration_client.app.dependency_overrides[get_db] = (
+                    original_db_override
+                )
+
+            settings.database_url = original_runtime_url
+            settings.migration_database_url = original_migration_url
+            engine.dispose()
+            migration_engine.dispose()
 
 @pytest.mark.parametrize('case', [
     'eligible_only', 'completed', 'expired', 'stale', 'ordering_only', 'unknown',
@@ -604,7 +854,7 @@ def test_prerequisite_semantics(client, db, start_case, monkeypatch, case):
 
 
 @pytest.mark.parametrize('insert', [False, True])
-def test_tool_writer_waits_for_start_commit(client, db, engine, start_case, insert):
+def test_tool_writer_waits_for_start_commit(committed_client, committed_db, committed_start_case, insert):
     from concurrent.futures import ThreadPoolExecutor
     from queue import Queue
     from time import monotonic, sleep
@@ -612,9 +862,9 @@ def test_tool_writer_waits_for_start_commit(client, db, engine, start_case, inse
     from sqlalchemy import event, text
     from sqlalchemy.orm import sessionmaker
 
-    path, headers, _, _, _ = start_case
-    body = confirmation(review(client, path))
-    factory = sessionmaker(engine)
+    path, headers, _, _, _ = committed_start_case
+    body = confirmation(review(committed_client, path))
+    factory = sessionmaker(committed_db.get_bind())
     pid = Queue()
 
     def write_tool():
@@ -622,13 +872,8 @@ def test_tool_writer_waits_for_start_commit(client, db, engine, start_case, inse
             pid.put(writer.scalar(text('SELECT pg_backend_pid()')))
             record_tool_state(writer, PROFILES[1 if insert else 0].tool, 'disabled', [])
 
-    # This concurrency test requires independently committed setup data.
-    # The shared db fixture retains an outer rollback-only transaction,
-    # which can deadlock the background writer during executor shutdown.
-    pytest.skip(
-        'Requires committed-transaction isolation; rollback fixture '
-        'cannot safely verify concurrent tool writes'
-    )
+    # Release the review transaction before starting concurrent work.
+    committed_db.rollback()
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = None
@@ -639,7 +884,7 @@ def test_tool_writer_waits_for_start_commit(client, db, engine, start_case, inse
                 return
             future = pool.submit(write_tool)
             writer_pid = pid.get(timeout=5)
-            with engine.connect() as observer:
+            with committed_db.get_bind().connect() as observer:
                 deadline = monotonic() + 5
                 while monotonic() < deadline:
                     observer.execute(text('SELECT pg_stat_clear_snapshot()'))
@@ -651,12 +896,11 @@ def test_tool_writer_waits_for_start_commit(client, db, engine, start_case, inse
                     sleep(0.02)
             pytest.fail('Tool writer did not wait for Start to commit')
 
-        event.listen(engine, 'before_cursor_execute', check_tool_lock)
+        event.listen(committed_db.get_bind(), 'before_cursor_execute', check_tool_lock)
         try:
-            response = client.post(path + '/start', headers=headers, json=body)
+            response = committed_client.post(path + '/start', headers=headers, json=body)
         finally:
-            event.remove(engine, 'before_cursor_execute', check_tool_lock)
-            db.rollback()
+            event.remove(committed_db.get_bind(), 'before_cursor_execute', check_tool_lock)
         assert response.status_code == 201
         assert future is not None
         future.result(timeout=5)

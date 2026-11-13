@@ -82,6 +82,162 @@ def db(engine):
                 transaction.rollback()
 
 
+
+
+@pytest.fixture
+def migration_db():
+    """Committed runtime session on the isolated migration-test database."""
+    import os
+
+    os.environ.update(
+        UPTIP_ENVIRONMENT="test",
+        UPTIP_PUBLIC_ORIGIN="https://testserver",
+        UPTIP_COOKIE_SECURE="true",
+        UPTIP_RATE_KEY="test-only-not-a-deployment-secret-123456",
+    )
+
+    from app.config import get_settings
+    get_settings.cache_clear()
+
+    yield from _migration_db_session()
+
+
+def _migration_db_session():
+    """Committed runtime session on the dedicated migration-test database."""
+    from app.config import get_settings
+
+    settings = get_settings()
+    runtime_url = make_url(settings.database_url)
+    migration_url = make_url(settings.migration_database_url)
+
+    if not (
+        runtime_url.username == "uptip_runtime"
+        and migration_url.username == "uptip"
+        and runtime_url.database == migration_url.database == "uptip"
+        and runtime_url.host == migration_url.host == "127.0.0.1"
+    ):
+        pytest.fail("Unsafe migration fixture configuration")
+
+    test_url = runtime_url.set(database="uptip_test_migration_0016")
+    dedicated_engine = create_engine(test_url, hide_parameters=True)
+
+    try:
+        with dedicated_engine.connect() as connection:
+            identity = connection.execute(text("""
+                SELECT current_database(),
+                       shobj_description(oid, 'pg_database')
+                FROM pg_database
+                WHERE datname = current_database()
+            """)).one()
+
+            revision = connection.scalar(
+                text("SELECT version_num FROM alembic_version")
+            )
+
+        if identity != (
+            "uptip_test_migration_0016",
+            "UPTIP disposable migration integration test database",
+        ) or revision != "0016":
+            pytest.fail("Migration database identity or revision mismatch")
+
+        factory = sessionmaker(
+            bind=dedicated_engine,
+            expire_on_commit=False,
+        )
+
+        with factory() as session:
+            yield session
+            session.rollback()
+
+    finally:
+        dedicated_engine.dispose()
+
+
+@pytest.fixture
+def migration_client(migration_db):
+    """Test client connected to the isolated migration-test database."""
+    from app.database import get_db
+    from app.main import create_app
+
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: migration_db
+
+    with TestClient(app, base_url="https://testserver") as test_client:
+        test_client.headers["Origin"] = "https://testserver"
+        yield test_client
+
+    app.dependency_overrides.clear()
+
+@pytest.fixture
+def committed_db(engine):
+    """Committed database session for isolated concurrency tests."""
+    from sqlalchemy.engine import make_url
+
+    raw_url = os.environ.get("UPTIP_TEST_DATABASE_URL")
+    if not raw_url:
+        pytest.fail("UPTIP_TEST_DATABASE_URL is required")
+
+    source_url = make_url(raw_url)
+
+    if (
+        source_url.drivername != "postgresql+psycopg"
+        or source_url.database != "uptip_test_readiness_fix"
+        or source_url.host not in {"127.0.0.1", "::1"}
+        or source_url.query
+    ):
+        pytest.fail("Unsafe concurrency database configuration")
+
+    url = source_url.set(database="uptip_test_concurrency")
+    dedicated_engine = create_engine(url, hide_parameters=True)
+
+    try:
+        with dedicated_engine.connect() as connection:
+            identity = connection.execute(text("""
+                SELECT current_database(),
+                       shobj_description(oid, 'pg_database')
+                FROM pg_database
+                WHERE datname = current_database()
+            """)).one()
+
+        assert identity == (
+            "uptip_test_concurrency",
+            "UPTIP disposable concurrency test database",
+        ), "Concurrency database safety verification failed"
+
+        factory = sessionmaker(
+            bind=dedicated_engine,
+            expire_on_commit=False,
+        )
+
+
+        # The database is recreated before each concurrency test.
+        # Never TRUNCATE protected execution-history tables.
+        try:
+            with factory() as session:
+                yield session
+                session.rollback()
+        finally:
+            pass
+
+    finally:
+        dedicated_engine.dispose()
+
+
+@pytest.fixture
+def committed_client(committed_db):
+    """Test client connected to the isolated concurrency database."""
+    from app.database import get_db
+    from app.main import create_app
+
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: committed_db
+
+    with TestClient(app, base_url="https://testserver") as test_client:
+        test_client.headers["Origin"] = "https://testserver"
+        yield test_client
+
+    app.dependency_overrides.clear()
+
 @pytest.fixture
 def client(db):
     from app.database import get_db

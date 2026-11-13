@@ -48,8 +48,8 @@ def engine():
                 text('SELECT version_num FROM alembic_version')
             )
 
-            if revision != '0010':
-                pytest.fail('Test database must be at migration 0010.', pytrace=False)
+            if revision != '0017':
+                pytest.fail('Test database must be at migration 0011.', pytrace=False)
 
         yield test_engine
     finally:

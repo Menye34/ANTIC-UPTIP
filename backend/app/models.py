@@ -255,18 +255,33 @@ class AssessmentStartEvidenceRecord(Base):
             ['execution_policy_approvals.reference', 'execution_policy_approvals.policy_digest'],
             name='fk_start_evidence_approval_binding',
         ),
+        ForeignKeyConstraint(
+            ['system_authorization_reference', 'policy_digest'],
+            ['system_policy_authorizations.reference',
+             'system_policy_authorizations.policy_digest'],
+            name='fk_start_evidence_system_authorization_binding',
+        ),
+        CheckConstraint(
+            '(approval_reference IS NULL) <> (system_authorization_reference IS NULL)',
+            name='ck_start_evidence_authorization_source',
+        ),
         CheckConstraint('valid_until > valid_from', name='ck_start_evidence_window'),
         CheckConstraint("json_typeof(evidence) = 'object'", name='ck_start_evidence_object'),
         CheckConstraint("btrim(reference) <> '' AND btrim(provenance) <> ''", name='ck_start_evidence_identity'),
         Index('ix_start_evidence_binding', 'assessment_id', 'target_id', 'evaluation_fingerprint', 'policy_digest'),
         Index('ix_start_evidence_approval', 'approval_reference', 'policy_digest'),
+        Index('ix_start_evidence_system_authorization',
+              'system_authorization_reference', 'policy_digest'),
     )
     reference: Mapped[str] = mapped_column(String(160), primary_key=True)
     assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id'))
     target_id: Mapped[UUID]
     evaluation_id: Mapped[UUID] = mapped_column(index=True)
     evaluation_fingerprint: Mapped[str] = mapped_column(String(64))
-    approval_reference: Mapped[str] = mapped_column(String(160))
+    approval_reference: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    system_authorization_reference: Mapped[str | None] = mapped_column(
+        String(160), nullable=True
+    )
     policy_digest: Mapped[str] = mapped_column(String(64))
     provenance: Mapped[str] = mapped_column(Text)
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))

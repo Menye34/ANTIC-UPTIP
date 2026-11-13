@@ -54,7 +54,8 @@ def downgrade():
         DO $$
         BEGIN
             IF EXISTS (SELECT 1 FROM assessment_start_authorizations)
-                OR EXISTS (SELECT 1 FROM assessments WHERE status = 'Ready') THEN
+                OR EXISTS (SELECT 1 FROM assessment_start_events)
+                OR EXISTS (SELECT 1 FROM assessments WHERE status IN ('Ready', 'Testing')) THEN
                 RAISE EXCEPTION 'Cannot downgrade while assessment Start history or Ready assessments exist';
             END IF;
         END;

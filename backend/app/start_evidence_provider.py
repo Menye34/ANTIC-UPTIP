@@ -31,13 +31,12 @@ def load_trusted_start_evidence(
 
     now = datetime.now(timezone.utc)
 
+    from .system_authorization_verifier import verify_system_authorization
+
+    # Retrieve evidence by its exact assessment and evaluation identity.
+    # The authorization source is determined by the persisted evidence row.
     records = db.scalars(
         select(AssessmentStartEvidenceRecord)
-        .join(
-            ExecutionPolicyApprovalRecord,
-            AssessmentStartEvidenceRecord.approval_reference
-            == ExecutionPolicyApprovalRecord.reference,
-        )
         .outerjoin(
             AuthorizationRecordRevocation,
             AuthorizationRecordRevocation.evidence_reference
@@ -47,15 +46,22 @@ def load_trusted_start_evidence(
             AssessmentStartEvidenceRecord.assessment_id == assessment_id,
             AssessmentStartEvidenceRecord.target_id == target_id,
             AssessmentStartEvidenceRecord.evaluation_id == evaluation_id,
-            AssessmentStartEvidenceRecord.evaluation_fingerprint == evaluation_fingerprint,
+            AssessmentStartEvidenceRecord.evaluation_fingerprint
+            == evaluation_fingerprint,
             AssessmentStartEvidenceRecord.policy_digest == policy_digest,
-            AssessmentStartEvidenceRecord.approval_reference == approval_reference,
             AssessmentStartEvidenceRecord.valid_from <= now,
             AssessmentStartEvidenceRecord.valid_until > now,
-            ExecutionPolicyApprovalRecord.policy_digest == policy_digest,
-            ExecutionPolicyApprovalRecord.valid_from <= now,
-            ExecutionPolicyApprovalRecord.valid_until > now,
             AuthorizationRecordRevocation.id.is_(None),
+            (
+                (AssessmentStartEvidenceRecord.approval_reference == approval_reference)
+                & AssessmentStartEvidenceRecord.system_authorization_reference.is_(None)
+            )
+            |
+            (
+                (AssessmentStartEvidenceRecord.system_authorization_reference
+                 == approval_reference)
+                & AssessmentStartEvidenceRecord.approval_reference.is_(None)
+            ),
         )
     ).all()
 
@@ -64,13 +70,41 @@ def load_trusted_start_evidence(
 
     record = records[0]
 
-    approval_revoked = db.scalar(
-        select(AuthorizationRecordRevocation.id).where(
-            AuthorizationRecordRevocation.approval_reference == approval_reference
+    if record.system_authorization_reference is not None:
+        verification = verify_system_authorization(
+            db,
+            record.system_authorization_reference,
+            policy_digest,
+            now=now,
         )
-    )
+        if not verification["valid"]:
+            return None
 
-    if approval_revoked is not None:
+    elif record.approval_reference is not None:
+        approval = db.scalar(
+            select(ExecutionPolicyApprovalRecord).where(
+                ExecutionPolicyApprovalRecord.reference
+                == record.approval_reference,
+                ExecutionPolicyApprovalRecord.policy_digest == policy_digest,
+                ExecutionPolicyApprovalRecord.valid_from <= now,
+                ExecutionPolicyApprovalRecord.valid_until > now,
+            )
+        )
+
+        if approval is None:
+            return None
+
+        revoked = db.scalar(
+            select(AuthorizationRecordRevocation.id).where(
+                AuthorizationRecordRevocation.approval_reference
+                == record.approval_reference
+            )
+        )
+
+        if revoked is not None:
+            return None
+
+    else:
         return None
 
     try:
