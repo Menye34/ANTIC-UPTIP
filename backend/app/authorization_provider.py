@@ -4,6 +4,7 @@ These providers do not grant execution authority.
 """
 
 from datetime import datetime, timezone
+import json
 
 from sqlalchemy import select
 
@@ -104,8 +105,8 @@ def load_trusted_policy(db):
         from pydantic import ValidationError
 
         try:
-            definition = PolicyDefinition.model_validate(
-                version.definition
+            definition = PolicyDefinition.model_validate_json(
+                json.dumps(version.definition)
             )
         except (ValidationError, TypeError, ValueError):
             return PolicySelection(
@@ -159,7 +160,6 @@ def load_trusted_policy(db):
 
     from pydantic import ValidationError
     from .execution_policy import PolicyDefinition
-    import json
 
     try:
         definition = PolicyDefinition.model_validate_json(

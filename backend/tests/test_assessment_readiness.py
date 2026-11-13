@@ -73,6 +73,33 @@ def test_resolved_baselines_do_not_bypass_missing_policy(client, db, engine, dra
     assert data['policy']['version'] == 1
     assert data['policy']['provenance'] is None
     assert data['authorization_checks'] == 'unavailable'
+    # Real provider configuration is insufficient even with a signing key and
+    # current resolved baselines: no approval/evidence means no Start token.
+    from pydantic import SecretStr
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), 'start_review_key',
+                        SecretStr('synthetic-test-only-key-' + 'x' * 32))
+    reviewed = client.get(path + '/readiness').json()
+    assert reviewed['start_review_eligible'] is False
+    assert reviewed['execution_authorized'] is False
+    assert reviewed['start_review']['confirmation_possible'] is False
+    assert reviewed['start_review']['review_token'] is None
+    assert reviewed['start_review']['mode'] is None
+    # A caller cannot manufacture the missing review authorization.
+    from uuid import uuid4
+    from sqlalchemy import func, select
+    from app.models import (Assessment, AssessmentStartAuthorization,
+                            AssessmentStartEvent, BaselineExecutionRequest)
+    before = [db.scalar(select(func.count()).select_from(model)) for model in
+              (AssessmentStartAuthorization, AssessmentStartEvent, BaselineExecutionRequest)]
+    rejected = client.post(path + '/start', headers={**headers, 'Idempotency-Key': str(uuid4())},
+                           json={'confirmed': True, 'mode': 'full', 'review_token': 'not-a-review-token'})
+    assert rejected.status_code == 409
+    assert rejected.json()['detail']['code'] == 'start_review_invalid'
+    assert db.scalar(select(Assessment.status)) == 'Draft'
+    assert before == [db.scalar(select(func.count()).select_from(model)) for model in
+                      (AssessmentStartAuthorization, AssessmentStartEvent, BaselineExecutionRequest)]
+
     by_value = {target['value']: target for target in data['targets']}
     inside = by_value['192.0.2.1']
     assert not inside['eligible']
@@ -242,3 +269,34 @@ def test_approved_policy_cannot_bypass_missing_safety_evidence(client, db, engin
     for result in (data, target, activity):
         assert result['start_review_eligible'] is False
         assert result['execution_authorized'] is False
+
+
+def test_signed_system_policy_still_requires_independent_start_evidence(client, db, draft, monkeypatch):
+    from app.models import ExecutionPolicyVersion
+    from app.system_policy_catalog import configured_policy
+    from app.system_authorization_persistence import create_system_authorization
+
+    path, headers = draft
+    monkeypatch.setenv('UPTIP_SYSTEM_AUTH_SIGNING_KEY', 'synthetic-readiness-test-only-' + 'x' * 48)
+    policy = configured_policy()
+    db.add(ExecutionPolicyVersion(policy_id=policy.policy_id, version=policy.version,
+                                 digest=policy.digest, definition=policy.model_dump(mode='json')))
+    db.flush()
+    authorization = create_system_authorization(db, validity_minutes=30)
+    record_tool_state(db, 'Nmap', 'enabled', ['ipv4-discovery'])
+    db.commit()
+    assert client.post(path + '/scope', headers=headers,
+                       json={'revision': 0, 'value': '192.0.2.1'}).status_code == 201
+    assert client.post(path + '/targets', headers=headers, json={'value': '192.0.2.1'}).status_code == 201
+    response = client.get(path + '/readiness')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['policy']['status'] == 'approved'
+    assert data['policy_approval']['reference'] == authorization.reference
+    activity = data['targets'][0]['baseline_activities'][0]
+    assert activity['status'] == 'resolved'
+    assert activity['safety_evidence'] is None
+    assert activity['policy']['reason_code'] == 'activity_parameters_unverified'
+    assert data['start_review']['confirmation_possible'] is False
+    assert data['start_review']['review_token'] is None
+    assert data['execution_authorized'] is False

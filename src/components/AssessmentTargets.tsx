@@ -47,6 +47,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   const startAttemptKey = useRef<string | null>(null)
   const [startOutcomeUnknown, setStartOutcomeUnknown] = useState(false)
   const [reviewExpired, setReviewExpired] = useState(false)
+  const currentReviewExpiry = useRef<number | null>(null)
   const pending = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -96,6 +97,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
         }
 
         const expires = review.expires_at === null ? null : Date.parse(review.expires_at)
+        currentReviewExpiry.current = expires
         setReviewExpired(expires !== null && (!Number.isFinite(expires) || expires <= Date.now()))
         setReadiness(result)
       })
@@ -134,7 +136,9 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
     if (!expiry) return
     const expires = Date.parse(expiry)
     if (!Number.isFinite(expires)) return
-    const timer = window.setTimeout(() => setReviewExpired(true), Math.max(0, expires - Date.now()))
+    const timer = window.setTimeout(() => {
+      if (currentReviewExpiry.current === expires) setReviewExpired(true)
+    }, Math.max(0, expires - Date.now()))
     return () => window.clearTimeout(timer)
   }, [readiness])
 
@@ -367,12 +371,24 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
                 {readiness.start_review.excluded_activities.map(activity => (
                   <li key={`${activity.target_id}:${activity.profile_id}`}>
                     {activity.activity || activity.profile_id}: {' '}
-                    {activity.exclusion_code || 'Authorization requirements not satisfied'}
+                    {activity.policy?.reason_code === activity.exclusion_code
+                      ? activity.policy.reason
+                      : activity.exclusion_code || 'Authorization requirements not satisfied'}
                   </li>
                 ))}
               </ul>
             )}
 
+            {readiness.reasons?.length > 0 && (
+              <ul>{readiness.reasons.map(reason => (
+                <li key={reason.code}>{reason.message}</li>
+              ))}</ul>
+            )}
+            {readiness.start_review.excluded_targets.map(target => (
+              <ul key={target.target_id}>{target.reasons.map(reason => (
+                <li key={reason.code}>{reason.message}</li>
+              ))}</ul>
+            ))}
             {readiness.start_review.excluded_activities.length === 0 && (
               <p>
                 No activities are currently authorized for Start confirmation,
@@ -382,6 +398,16 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
           </div>
         )}
 
+        {reviewExpired && (
+          <p role="status">The Start review has expired. Refresh it before confirming.</p>
+        )}
+        {readiness && (!readiness.start_review.confirmation_possible || reviewExpired) && (
+          <button type="button" className="analyst-link"
+            disabled={busy || starting || startOutcomeUnknown || Boolean(startReceipt)}
+            onClick={() => { setStartOpen(false); setReadinessAttempt(n => n + 1) }}>
+            Refresh readiness
+          </button>
+        )}
         {readinessError && (
           <div role="alert">
             <p>{readinessError}</p>

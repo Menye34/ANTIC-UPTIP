@@ -107,3 +107,40 @@ it('treats an invalid success receipt as an uncertain outcome and prevents anoth
   expect(await screen.findByText(/confirmation outcome is unknown/)).toBeVisible()
   expect(start).toBeDisabled()
 })
+
+it('refreshes an expired review without bypassing backend eligibility', async () => {
+  let checks = 0
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/readiness')) {
+      checks++
+      return response({ start_review: { ...startReview,
+        expires_at: new Date(Date.now() + (checks === 1 ? -1000 : 600000)).toISOString() } })
+    }
+    return response({ status: 'Draft', can_edit: true, targets: [], counts: { total: 0, eligible: 0, blocked: 0 } })
+  }))
+  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
+  expect(await screen.findByText(/Start review has expired/)).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Start Assessment' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh readiness' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Start Assessment' })).toBeEnabled())
+  expect(checks).toBe(2)
+})
+
+it('renders backend blocker messages and excluded-target reasons without inventing eligibility', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/readiness')) return response({
+      reasons: [{ code: 'system_authorization_unverified', message: 'System authorization is not valid.' }],
+      start_review: { ...startReview, confirmation_possible: false, mode: null, review_token: null,
+        expires_at: null, eligible_activities: [], excluded_activities: [{ ...eligible,
+          exclusion_code: 'activity_parameters_unverified',
+          policy: { reason_code: 'activity_parameters_unverified', reason: 'Activity parameters are unverified.' } }],
+      },
+    })
+    return response({ status: 'Draft', can_edit: true, targets: [], counts: { total: 0, eligible: 0, blocked: 0 } })
+  }))
+  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
+  expect(await screen.findByText('System authorization is not valid.')).toBeVisible()
+  expect(screen.getByText(/Activity parameters are unverified/)).toBeVisible()
+  expect(screen.getByText('Outside authorized scope')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Start Assessment' })).toBeDisabled()
+})

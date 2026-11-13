@@ -426,3 +426,20 @@ digests, approval and evidence validity windows, revocation, current baseline
 binding, and provenance. It must reject ambiguous active records and coordinate
 selection with revocation through the Start transaction. This migration
 does not seed records or connect the provider.
+
+
+### System authorization timestamp signatures
+
+System authorization validity timestamps are canonicalized to UTC before HMAC
+payload serialization. Timezone-aware values representing the same instant
+produce identical payloads regardless of the PostgreSQL session timezone.
+Naive or malformed timestamps fail verification. All other signed fields and
+HMAC-SHA256 verification remain unchanged.
+
+Compatibility preserves the original issuer's UTC `datetime.isoformat()`
+representation (`+00:00`, with automatic microsecond precision). Previously
+issued signatures therefore require no record updates or migration. Verification
+uses one canonical payload, with no alternate-signature fallback. Records signed
+outside that issuer convention remain invalid and must be reviewed and replaced
+through the governed revocation/issuance workflow; do not rewrite historical
+records or re-sign them automatically.

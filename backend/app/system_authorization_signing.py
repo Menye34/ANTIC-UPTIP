@@ -1,9 +1,26 @@
 """Authenticated signatures for system-managed authorization records."""
 
+from datetime import datetime, timezone
+
 import hashlib
 import hmac
 import json
 import os
+
+
+def canonical_authorization_time(value: str) -> str:
+    """Represent an instant exactly as the original UTC issuer did.
+
+    Keep isoformat's automatic microsecond precision and +00:00 spelling:
+    these preserve existing issuer signatures, including whole-second values.
+    Naive timestamps have no trusted instant and are rejected.
+    """
+    if not isinstance(value, str):
+        raise ValueError("Authorization timestamps must be timezone-aware strings.")
+    instant = datetime.fromisoformat(value)
+    if instant.utcoffset() is None:
+        raise ValueError("Authorization timestamps must include a timezone.")
+    return instant.astimezone(timezone.utc).isoformat()
 
 
 def authorization_payload(
@@ -17,8 +34,8 @@ def authorization_payload(
         {
             "reference": reference,
             "policy_digest": policy_digest,
-            "valid_from": valid_from,
-            "valid_until": valid_until,
+            "valid_from": canonical_authorization_time(valid_from),
+            "valid_until": canonical_authorization_time(valid_until),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -77,7 +94,7 @@ def verify_authorization_signature(
             valid_from,
             valid_until,
         )
-    except RuntimeError:
+    except (RuntimeError, ValueError, TypeError, OverflowError):
         return False
 
     return hmac.compare_digest(expected, signature)

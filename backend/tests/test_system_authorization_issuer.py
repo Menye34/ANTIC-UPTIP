@@ -53,3 +53,51 @@ def test_naive_timestamp_rejected(monkeypatch):
         prepare_system_authorization(
             now=datetime(2026, 11, 11, 12, 0),
         )
+
+
+@pytest.mark.parametrize('microsecond', [0, 123456])
+def test_timestamp_offsets_preserve_original_utc_signatures(monkeypatch, microsecond):
+    """Reproduce the old payload independently; no permissive fallback."""
+    import hashlib
+    import hmac
+    import json
+    from datetime import timedelta
+    from app.system_authorization_signing import sign_authorization
+
+    key = 'synthetic-timezone-regression-key-' + 'x' * 32
+    monkeypatch.setenv('UPTIP_SYSTEM_AUTH_SIGNING_KEY', key)
+    start = datetime(2026, 11, 13, 12, 0, microsecond=microsecond, tzinfo=timezone.utc)
+    end = start + timedelta(minutes=30)
+    fields = dict(reference='legacy-utc-record', policy_digest='a' * 64,
+                  valid_from=start.isoformat(), valid_until=end.isoformat())
+    legacy_payload = json.dumps(fields, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    legacy_signature = hmac.new(key.encode(), legacy_payload, hashlib.sha256).hexdigest()
+    assert sign_authorization(**fields) == legacy_signature
+    for offset in (1, -5, 5.5):
+        zone = timezone(timedelta(hours=offset))
+        shifted = {**fields, 'valid_from': start.astimezone(zone).isoformat(),
+                   'valid_until': end.astimezone(zone).isoformat()}
+        assert sign_authorization(**shifted) == legacy_signature
+        assert verify_authorization_signature(legacy_signature, **shifted)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('reference', 'other-record'), ('policy_digest', 'b' * 64),
+    ('valid_from', '2026-11-13T12:00:01+00:00'),
+    ('valid_until', '2026-11-13T12:31:00+00:00'),
+])
+def test_changed_signed_field_is_rejected(monkeypatch, field, value):
+    from app.system_authorization_signing import sign_authorization
+    monkeypatch.setenv('UPTIP_SYSTEM_AUTH_SIGNING_KEY', 'synthetic-timestamp-key-' + 'x' * 48)
+    fields = dict(reference='original-record', policy_digest='a' * 64,
+                  valid_from='2026-11-13T12:00:00+00:00', valid_until='2026-11-13T12:30:00+00:00')
+    signature = sign_authorization(**fields)
+    assert not verify_authorization_signature(signature, **{**fields, field: value})
+    assert not verify_authorization_signature('0' * 64, **fields)
+
+
+@pytest.mark.parametrize('invalid', ['2026-11-13T12:00:00', 'not-a-date', None])
+def test_untrusted_timestamp_representation_fails_closed(monkeypatch, invalid):
+    monkeypatch.setenv('UPTIP_SYSTEM_AUTH_SIGNING_KEY', 'synthetic-timestamp-key-' + 'x' * 48)
+    assert not verify_authorization_signature('0' * 64, 'reference', 'a' * 64,
+                                              invalid, '2026-11-13T12:30:00+00:00')

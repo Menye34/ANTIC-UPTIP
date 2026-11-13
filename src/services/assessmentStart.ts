@@ -6,6 +6,8 @@ export interface StartActivity {
   activity?: string
   tool?: string
   exclusion_code?: string
+  reason?: string
+  policy?: { reason_code: string; reason: string }
 }
 
 export interface StartExcludedTarget {
