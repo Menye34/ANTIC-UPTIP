@@ -3,10 +3,11 @@ import type { FormEvent } from 'react'
 import { requestTargets } from '../services/targets'
 import {
   getAssessmentReadiness,
+  getAssessmentTesting,
   confirmAssessmentStart,
   AssessmentStartError,
 } from '../services/assessmentStart'
-import type { AssessmentReadiness, StartReceipt } from '../services/assessmentStart'
+import type { AssessmentReadiness, StartReceipt, TestingOverview } from '../services/assessmentStart'
 import type { Target } from '../services/targets'
 import draftIcon from '../assets/assessment/target-draft.svg'
 import { ScopeError, scopeInputError } from '../services/scope'
@@ -18,6 +19,9 @@ const baselineLabels = {
   requires_revalidation: 'Requires Revalidation', unavailable: 'Unavailable',
   no_compatible_baseline: 'No compatible baseline',
 }
+
+const executionLabels = { queued: 'Queued', in_progress: 'Running', completed: 'Completed',
+  failed: 'Failed', stopped: 'Stopped', blocked: 'Blocked', cancelled: 'Cancelled' } as const
 
 const scopeLabels = { in_scope: 'In scope', out_of_scope: 'Out of scope', requires_revalidation: 'Requires revalidation' }
 
@@ -40,6 +44,14 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState('')
   const [startReceipt, setStartReceipt] = useState<StartReceipt>()
+  const [testing, setTesting] = useState<TestingOverview>()
+  const [testingError, setTestingError] = useState('')
+  const [testingLoading, setTestingLoading] = useState(false)
+  const [testingAttempt, setTestingAttempt] = useState(0)
+  const lifecycle = startReceipt?.lifecycle_status ?? data?.status
+  const isDraft = lifecycle === 'Draft'
+  const isTesting = lifecycle === 'Testing'
+  const canEdit = isDraft && data?.can_edit
   const field = useRef<HTMLInputElement>(null)
   const dialog = useRef<HTMLDialogElement>(null)
   const startDialog = useRef<HTMLDialogElement>(null)
@@ -67,7 +79,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   }, [])
 
   useEffect(() => {
-    if (!data) return
+    if (!data || !isDraft || startReceipt) return
 
     const controller = new AbortController()
     Promise.resolve().then(() => {
@@ -79,6 +91,10 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       .then(result => {
         if (controller.signal.aborted || !result) return
 
+        if (result.lifecycle_status === 'Testing' || result.lifecycle_status === 'Ready') {
+          setData(current => current && { ...current, status: result.lifecycle_status, can_edit: false })
+          return
+        }
         const review = result?.start_review
         if (
           !review ||
@@ -117,7 +133,37 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       })
 
     return () => controller.abort()
-  }, [id, data, readinessAttempt, onExpired])
+  }, [id, data, isDraft, startReceipt, readinessAttempt, onExpired])
+  useEffect(() => {
+    if (!isTesting) return
+    const controller = new AbortController()
+    let timer: number | undefined
+    let stopped = false
+    async function load() {
+      setTestingLoading(true)
+      setTestingError('')
+      try {
+        const result = await getAssessmentTesting(id, controller.signal)
+        if (!controller.signal.aborted) setTesting(result)
+      } catch (failure) {
+        if (controller.signal.aborted) return
+        setTesting(undefined)
+        if (failure instanceof AssessmentStartError && failure.status === 401) {
+          stopped = true
+          onExpired()
+        } else {
+          setTestingError('Unable to load current execution status. Refresh to try again.')
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setTestingLoading(false)
+          if (!stopped) timer = window.setTimeout(() => void load(), 15000)
+        }
+      }
+    }
+    void Promise.resolve().then(() => { if (!controller.signal.aborted) return load() })
+    return () => { controller.abort(); window.clearTimeout(timer) }
+  }, [id, isTesting, testingAttempt, onExpired])
   useEffect(() => {
     if (removing && !dialog.current?.open) dialog.current?.showModal()
   }, [removing])
@@ -132,6 +178,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   }, [startOpen])
 
   useEffect(() => {
+    if (!isDraft || startReceipt) return
     const expiry = readiness?.start_review.expires_at
     if (!expiry) return
     const expires = Date.parse(expiry)
@@ -140,7 +187,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       if (currentReviewExpiry.current === expires) setReviewExpired(true)
     }, Math.max(0, expires - Date.now()))
     return () => window.clearTimeout(timer)
-  }, [readiness])
+  }, [readiness, isDraft, startReceipt])
 
   function closeRemoval() {
     dialog.current?.close()
@@ -148,7 +195,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   }
 
   async function save(change: NonNullable<Parameters<typeof requestTargets>[3]>) {
-    if (!data?.can_edit || pending.current) return
+    if (!canEdit || pending.current) return
     const controller = new AbortController()
     pending.current = controller
     setBusy(true)
@@ -187,6 +234,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   }
 
   async function confirmStart() {
+    if (!isDraft || startReceipt) return
     const review = readiness?.start_review
     if (review?.expires_at) {
       const expires = Date.parse(review.expires_at)
@@ -223,6 +271,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       if (controller.signal.aborted) return
 
       setStartReceipt(receipt)
+      setData(current => current && { ...current, status: receipt.lifecycle_status, can_edit: false })
       startAttemptKey.current = null
       setStartOpen(false)
       setReadiness(undefined)
@@ -276,7 +325,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
     <header className="scope-heading">
       <div><h1>Assessment Targets</h1><p>Explicitly add targets, review system-prepared baselines and authorize testing.</p>
         <a className="scope-secondary" href={overview + '/scope'}>Back to Authorized Scope</a></div>
-      {data && <span className="assessment-badge"><img src={draftIcon} alt="" />{data.status}</span>}
+      {data && <span className="assessment-badge"><img src={draftIcon} alt="" />{lifecycle}</span>}
     </header>
     {error && <div className="analyst-card" role="alert"><p>{error}</p><button className="analyst-link" onClick={() => {
       setError('')
@@ -287,7 +336,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       <section className="analyst-card target-list">
         <h2>Assessment Targets</h2>
         <p>Add targets explicitly. UPTIP automatically classifies and checks each target against scope.</p>
-        {data.can_edit && <form onSubmit={submit} noValidate>
+        {canEdit && <form onSubmit={submit} noValidate>
           <div className="scope-input-row">
             <input ref={field} aria-label={editing ? 'Edit target' : 'Target'} value={value} disabled={busy} maxLength={1024}
               aria-invalid={Boolean(fieldError)} aria-describedby={fieldError ? 'target-error' : undefined}
@@ -307,7 +356,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
             <td>{target.normalized_value}</td><td>{target.kind}</td>
             <td title={target.classification_reason}>{scopeLabels[target.scope_status]}</td>
             <td data-eligibility={target.eligibility}>{target.eligibility === 'pending' ? 'Pending' : 'Blocked'}</td>
-            <td><div className="scope-actions">{data.can_edit && <>
+            <td><div className="scope-actions">{canEdit && <>
               <button className="analyst-link" aria-label={'Edit ' + target.normalized_value} disabled={busy} onClick={() => {
                 setEditing(target); setValue(target.original_value); setFieldError(''); field.current?.focus()
               }}>Edit</button>
@@ -335,12 +384,28 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
         </tr>)}</tbody></table> : <p>No baselines resolved yet. Add assessment targets to allow UPTIP to automatically determine their compatible testing baselines.</p>}
       </section>
       <section className="analyst-card">
-        <h2>Review &amp; Authorization</h2>
+        <h2>{isTesting ? 'Assessment Started' : 'Review & Authorization'}</h2>
         <dl className="target-counts">
           <div><dt>Total targets</dt><dd>{data.counts.total}</dd></div>
           <div><dt>In-scope targets</dt><dd>{data.targets.filter(target => target.scope_status === 'in_scope').length}</dd></div>
           <div><dt>Blocked targets</dt><dd>{data.counts.blocked}</dd></div>
         </dl>
+        {isTesting && <>
+          <p>The assessment has entered the Testing phase. Authorized baseline activities have been scheduled.</p>
+          <p>Scheduling does not mean a scanner has started.</p>
+          <h3>Latest retrieved execution status</h3>
+          {testingLoading && <p role="status">Updating execution status…</p>}
+          {testing && testing.assessment_id === id && <dl className="target-counts">
+            {(Object.keys(executionLabels) as Array<keyof typeof executionLabels>).map(state => (
+              <div key={state}><dt>{executionLabels[state]}</dt><dd>{testing.counts[state]}</dd></div>
+            ))}
+          </dl>}
+          {testingError && <p role="alert">{testingError}</p>}
+          <button type="button" className="analyst-link" disabled={testingLoading}
+            onClick={() => setTestingAttempt(n => n + 1)}>Refresh execution status</button>
+          <small> Status refreshes automatically every 15 seconds.</small>
+        </>}
+        {isDraft && <>
         <h3>Prepared testing activities</h3>
         {readiness && <p>{new Set(readiness.start_review.eligible_activities.map(activity => activity.target_id)).size} targets eligible for scheduling; {readiness.start_review.excluded_targets.length} targets excluded from Start.</p>}
         {!readiness && !readinessError && (
@@ -421,16 +486,6 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
             </button>
           </div>
         )}
-        {startReceipt && (
-          <div className="scope-success" role="status">
-            <strong>{startReceipt.lifecycle_status === 'Testing' ? 'Assessment Testing' : 'Assessment Ready'}</strong>
-            <p>
-              {startReceipt.lifecycle_status === 'Testing'
-                ? `${startReceipt.queued_execution_count} baseline activities queued. Scanner dispatch requires separate checks.`
-                : `${startReceipt.authorized_activity_count} activities included in the earlier Start authorization.`}
-            </p>
-          </div>
-        )}
 
         {startError && (
           <p role="alert">{startError}</p>
@@ -461,9 +516,21 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
             Explicit analyst authorization and final checks are required.
           </small>
         </div>
+        </>}
+        {startReceipt && (
+          <div className="scope-success" role="status">
+            <strong>{startReceipt.lifecycle_status === 'Testing' ? 'Start confirmed' : 'Assessment Ready'}</strong>
+            <p>
+              {startReceipt.lifecycle_status === 'Testing'
+                ? `${startReceipt.queued_execution_count} baseline activities queued at confirmation. This historical receipt is not the current execution status. Scanner dispatch requires separate checks.`
+                : `${startReceipt.authorized_activity_count} activities included in the earlier Start authorization.`}
+            </p>
+          </div>
+        )}
+
       </section>
     </>}
-    <dialog
+    {isDraft && !startReceipt && <dialog
       ref={startDialog}
       aria-labelledby="start-assessment-title"
       onCancel={event => {
@@ -554,7 +621,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
           {starting ? 'Confirming…' : 'Confirm Start Assessment'}
         </button>
       </div>
-    </dialog>
+    </dialog>}
 
     {removing && <dialog ref={dialog} aria-labelledby="remove-target-title" onCancel={event => {
       event.preventDefault()

@@ -116,6 +116,33 @@ export function getAssessmentReadiness(
   )
 }
 
+export interface TestingOverview {
+  assessment_id: string
+  lifecycle_status: 'Testing'
+  counts: {
+    total: number
+    queued: number
+    in_progress: number
+    completed: number
+    failed: number
+    stopped: number
+    blocked: number
+    cancelled: number
+  }
+}
+
+export async function getAssessmentTesting(assessmentId: string, signal: AbortSignal) {
+  const result = await startRequest<TestingOverview>(assessmentId, '/testing', signal)
+  const states = ['queued', 'in_progress', 'completed', 'failed', 'stopped', 'blocked', 'cancelled'] as const
+  if (result.assessment_id !== assessmentId || result.lifecycle_status !== 'Testing' ||
+      !result.counts || !Number.isInteger(result.counts.total) || result.counts.total < 0 ||
+      states.some(state => !Number.isInteger(result.counts[state]) || result.counts[state] < 0) ||
+      states.reduce((total, state) => total + result.counts[state], 0) !== result.counts.total) {
+    throw new Error('Invalid Testing overview response.')
+  }
+  return result
+}
+
 export async function confirmAssessmentStart(
   assessmentId: string,
   csrfToken: string,
