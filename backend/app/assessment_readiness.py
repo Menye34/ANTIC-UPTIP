@@ -55,7 +55,7 @@ def reason(code, message):
     return {'code': code, 'message': message}
 
 
-def evaluate_readiness(db, assessment):
+def evaluate_execution_readiness(db, assessment):
     """Evaluate persisted state while the caller holds the assessment read lock."""
     boundaries = scope_entries(db, assessment.id)
     states = tool_states(db)
@@ -247,4 +247,73 @@ def evaluate_readiness(db, assessment):
         'start_review_eligible': any(target['start_review_eligible'] for target in results),
         'execution_authorized': False,
         'authorization_checks': 'unavailable', 'targets': results,
+    }
+
+
+def evaluate_readiness(db, assessment):
+    """Read-only scheduling evaluation; execution approval remains separate."""
+    from . import scheduling_policy
+    boundaries = scope_entries(db, assessment.id)
+    digest = fingerprint(sorted(map(list, boundaries)))
+    states = tool_states(db)
+    assignments = current_assignments(db, assessment.id)
+    targets = db.scalars(select(AssessmentTarget).where(AssessmentTarget.assessment_id == assessment.id)
+                         .order_by(AssessmentTarget.created_at, AssessmentTarget.id)).all()
+    reasons = []
+    if assessment.status != 'Draft':
+        reasons.append(reason('lifecycle_not_draft', 'Only Draft assessments can be started.'))
+    if not boundaries:
+        reasons.append(reason('no_authorized_scope', 'No authorized scope is defined.'))
+    if not targets:
+        reasons.append(reason('no_targets', 'No assessment targets are defined.'))
+    results = []
+    for target in targets:
+        try:
+            actual, _ = classify(target.normalized_value, target.kind, boundaries)
+        except ValueError:
+            actual = 'requires_revalidation'
+        scope_status = actual
+        if target.scope_revision != assessment.scope_revision or target.scope_status != actual:
+            scope_status = 'requires_revalidation'
+        activities, summary = baseline_view(target, assessment.scope_revision, states, assignments.get(target.id, {}))
+        target_reasons = []
+        if scope_status != 'in_scope':
+            target_reasons.append(reason('target_scope_invalid', 'Target is outside current authorized scope or requires revalidation.'))
+        for activity in activities:
+            _, evaluation = assignments.get(target.id, {}).get(activity['profile_id'], (None, None))
+            if scope_status != 'in_scope':
+                activity.update(status='blocked', reason_code='target_scope_invalid', reason=target_reasons[0]['message'])
+            prep, outcome = scheduling_policy.prepare(assessment, target, activity, evaluation,
+                states.get(activity['tool']), scope_status, digest)
+            activity.update(
+                scheduling_preparation=prep, policy=outcome, policy_dependencies=[],
+                policy_eligible=prep is not None, start_review_eligible=prep is not None,
+                execution_authorized=False, safety_evidence=None,
+                evaluation_id=evaluation.id if evaluation else None,
+                evaluation_fingerprint=evaluation.fingerprint if evaluation else None,
+                profile_digest=evaluation.decision.get('profile', {}).get('digest') if evaluation else None,
+                required_capability='ipv4-discovery' if prep else None,
+            )
+        eligible = any(item['start_review_eligible'] for item in activities)
+        if not activities:
+            target_reasons.append(reason('no_compatible_baseline', 'No compatible baseline is available.'))
+        results.append({
+            'target_id': target.id, 'value': target.normalized_value, 'kind': target.kind,
+            'scope_status': scope_status, 'target_revision': target.revision,
+            'state': 'eligible' if eligible else 'blocked', 'eligible': eligible,
+            'start_review_eligible': eligible, 'execution_authorized': False,
+            'baseline_summary': summary, 'baseline_activities': activities, 'reasons': target_reasons,
+        })
+    eligible_count = sum(t['eligible'] for t in results)
+    return {
+        'assessment_id': assessment.id, 'lifecycle_status': assessment.status,
+        'scope_revision': assessment.scope_revision, 'scope_digest': digest,
+        'state': 'eligible' if results and eligible_count == len(results) else 'partial' if eligible_count else 'blocked',
+        'counts': {'total': len(results), 'eligible': eligible_count, 'blocked_or_excluded': len(results)-eligible_count},
+        'reasons': reasons, 'policy': scheduling_policy.public_policy(), 'policy_approval': None,
+        'scheduling_policy': scheduling_policy.public_policy(),
+        'start_review_eligible': bool(eligible_count), 'execution_authorized': False,
+        'authorization_checks': 'scheduling_only',
+        'dispatch': {'authorized': False, 'reason_code': 'dispatch_safety_checks_pending'},
+        'targets': results,
     }

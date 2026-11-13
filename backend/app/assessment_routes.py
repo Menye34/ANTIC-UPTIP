@@ -162,7 +162,13 @@ def get_readiness(assessment_id: UUID, request: Request, response: Response,
     logging.getLogger('uptip.assessment').info(
         'start_review actor=%s assessment=%s confirmable=%s', user.id, assessment_id, review['confirmation_possible'],
     )
-    return {**readiness, 'start_review_eligible': review['confirmation_possible'], 'start_review': review}
+    blockers = []
+    if assessment.creator_id != user.id:
+        blockers.append({'code': 'start_creator_required', 'message': 'Only the assessment creator can confirm Start.'})
+    if not signing_key(settings):
+        blockers.append({'code': 'start_signing_unavailable', 'message': 'Secure Start confirmation is unavailable.'})
+    return {**readiness, 'reasons': readiness['reasons'] + blockers,
+            'start_review_eligible': review['confirmation_possible'], 'start_review': review}
 
 class StartConfirmation(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)

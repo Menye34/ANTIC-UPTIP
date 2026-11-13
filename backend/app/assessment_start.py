@@ -6,7 +6,8 @@ import json
 from .baseline_catalog import fingerprint
 from .security import client_key
 
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
+LEGACY_SNAPSHOT_VERSION = 2
 TOKEN_LIFETIME = timedelta(minutes=10)
 
 
@@ -35,7 +36,7 @@ def dependency_failure(item, candidates, policy_digest, now):
     return None
 
 
-def snapshot_for(readiness):
+def legacy_snapshot_for(readiness):
     targets = []
     pending = {}
     excluded_targets = []
@@ -97,7 +98,7 @@ def snapshot_for(readiness):
         mode = 'partial' if excluded_targets or excluded_activities else 'full'
     policy = readiness['policy']
     return {
-        'schema_version': SNAPSHOT_VERSION,
+        'schema_version': LEGACY_SNAPSHOT_VERSION,
         'assessment_id': str(readiness['assessment_id']),
         'lifecycle_status': readiness['lifecycle_status'],
         'scope_revision': readiness['scope_revision'],
@@ -110,6 +111,46 @@ def snapshot_for(readiness):
                    'approval_expires_at': approval.get('expires_at')},
         'mode': mode,
     }
+
+
+def snapshot_for(readiness):
+    if 'scheduling_policy' not in readiness:
+        return legacy_snapshot_for(readiness)
+    from .scheduling_policy import validate_preparation
+    eligible, excluded, excluded_targets, targets = [], [], [], []
+    for target in sorted(readiness['targets'], key=lambda t: str(t['target_id'])):
+        tid = str(target['target_id'])
+        targets.append({'target_id': tid, 'value': target['value'], 'kind': target['kind'],
+                        'revision': target['target_revision'], 'scope_status': target['scope_status']})
+        permitted = False
+        for activity in target['baseline_activities']:
+            item = {**activity, 'target_id': tid, 'evaluation_id': str(activity['evaluation_id']) if activity['evaluation_id'] else None}
+            prep = item.get('scheduling_preparation')
+            if (readiness['lifecycle_status'] == 'Draft' and target['scope_status'] == 'in_scope'
+                    and item['start_review_eligible'] and validate_preparation(prep)
+                    and prep['assessment_id'] == str(readiness['assessment_id']) and prep['target_id'] == tid
+                    and prep['evaluation_id'] == item['evaluation_id']
+                    and prep['evaluation_fingerprint'] == item['evaluation_fingerprint']
+                    and prep['scope_revision'] == readiness['scope_revision']
+                    and prep['scope_digest'] == readiness['scope_digest']
+                    and prep['target_revision'] == target['target_revision']
+                    and prep['target_value'] == target['value'] and prep['target_kind'] == target['kind']
+                    and item.get('policy_dependencies') == []
+                    and item.get('profile_digest') == prep['profile_digest']):
+                eligible.append(item)
+                permitted = True
+            else:
+                excluded.append({**item, 'start_review_eligible': False,
+                    'exclusion_code': item['policy']['reason_code'] if prep is None else 'scheduling_preparation_invalid'})
+        if not permitted:
+            excluded_targets.append({'target_id': tid, 'reasons': target['reasons'] or [
+                {'code': 'no_eligible_activity', 'message': 'No activity is eligible for queued scheduling.'}]})
+    return {'schema_version': SNAPSHOT_VERSION, 'purpose': 'schedule_only',
+            'assessment_id': str(readiness['assessment_id']), 'lifecycle_status': readiness['lifecycle_status'],
+            'scope_revision': readiness['scope_revision'], 'scope_digest': readiness['scope_digest'],
+            'targets': targets, 'eligible_activities': eligible, 'excluded_activities': excluded,
+            'excluded_targets': excluded_targets, 'policy': readiness['scheduling_policy'],
+            'mode': ('partial' if excluded or excluded_targets else 'full') if eligible else None}
 
 
 def signing_key(settings):
@@ -131,16 +172,15 @@ def start_review(snapshot, key, actor_id, session_token, *, creator):
     expiry = None
     token = None
     if possible:
-        expiry = min(
-            now + TOKEN_LIFETIME,
-            *(datetime.fromisoformat(item['safety_evidence']['expires_at']) for item in snapshot['eligible_activities']),
-        )
-        for item in snapshot['eligible_activities']:
-            for proof in item['safety_evidence']['prerequisite_completions']:
-                expiry = min(expiry, datetime.fromisoformat(proof['expires_at']))
-        approval_expiry = snapshot['policy']['approval_expires_at']
-        if approval_expiry:
-            expiry = min(expiry, datetime.fromisoformat(approval_expiry))
+        expiry = now + TOKEN_LIFETIME
+        if snapshot.get('purpose') != 'schedule_only':
+            expiry = min(expiry, *(datetime.fromisoformat(item['safety_evidence']['expires_at']) for item in snapshot['eligible_activities']))
+            for item in snapshot['eligible_activities']:
+                for proof in item['safety_evidence']['prerequisite_completions']:
+                    expiry = min(expiry, datetime.fromisoformat(proof['expires_at']))
+            approval_expiry = snapshot['policy']['approval_expires_at']
+            if approval_expiry:
+                expiry = min(expiry, datetime.fromisoformat(approval_expiry))
         if expiry <= now:
             possible = False
             expiry = None

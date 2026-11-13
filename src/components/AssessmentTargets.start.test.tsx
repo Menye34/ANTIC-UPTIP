@@ -58,6 +58,8 @@ it('accepts Testing, preserves exclusions and submits session CSRF and explicit 
   render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
   const start = await screen.findByRole('button', { name: 'Start Assessment' })
   await waitFor(() => expect(start).toBeEnabled())
+  expect(screen.getByText('In-scope targets')).toBeVisible()
+  expect(screen.getByText(/1 targets eligible for scheduling; 1 targets excluded from Start/)).toBeVisible()
   fireEvent.click(start)
   expect(await screen.findByText(/Outside authorized scope/)).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: 'Confirm Start Assessment' }))

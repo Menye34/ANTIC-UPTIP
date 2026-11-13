@@ -11,7 +11,7 @@ from sqlalchemy import select
 from .assessment_readiness import evaluate_readiness
 from .models import Assessment, AssessmentTarget
 from .nmap_discovery_profile import NMAP_DISCOVERY_PARAMETER_DIGEST
-from .system_policy_catalog import configured_policy
+from .scheduling_policy import public_policy
 from .nmap_execution_binding import (
     ExecutionBindingError,
     NmapExecutionPlan,
@@ -55,17 +55,17 @@ def bind_nmap_plan(db, *, assessment_id: UUID, target_id: UUID) -> BoundNmapPlan
 
     policy = readiness.get("policy") or {}
 
-    if policy.get("status") != "configured":
+    if policy.get("status") != "system_managed" or policy.get("purpose") != "schedule_only":
         raise ExecutionBindingError(
             "Expected system-managed execution policy is unavailable."
         )
 
-    trusted_policy = configured_policy()
+    trusted_policy = public_policy()
 
     if (
-        policy.get("id") != trusted_policy.policy_id
-        or policy.get("version") != trusted_policy.version
-        or policy.get("digest") != trusted_policy.digest
+        policy.get("id") != trusted_policy['id']
+        or policy.get("version") != trusted_policy['version']
+        or policy.get("digest") != trusted_policy['digest']
     ):
         raise ExecutionBindingError(
             "System execution policy integrity verification failed."
@@ -97,7 +97,8 @@ def bind_nmap_plan(db, *, assessment_id: UUID, target_id: UUID) -> BoundNmapPlan
         None,
     )
 
-    if activity is None or activity.get("status") != "resolved":
+    if (activity is None or activity.get("status") != "resolved"
+            or not activity.get('start_review_eligible')):
         raise ExecutionBindingError("Current Nmap baseline is unavailable.")
 
     evaluation_id = activity.get("evaluation_id")

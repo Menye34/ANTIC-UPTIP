@@ -69,6 +69,11 @@ def verify_nmap_dispatch_authorization(
         if authorization is None:
             return deny("start_authorization_not_found")
 
+        # Scheduling consent is not an execution approval, regardless of any
+        # independently configured execution policy. Keep dispatch disabled.
+        if isinstance(authorization.snapshot, dict) and authorization.snapshot.get('purpose') == 'schedule_only':
+            return deny('dispatch_safety_checks_pending')
+
         policy = load_trusted_policy(db)
 
         if (
@@ -301,7 +306,7 @@ def verify_start_snapshot_integrity(authorization, request, snapshot):
     Successful verification never grants scanner dispatch permission.
     """
     from hmac import compare_digest
-    from .assessment_start import SNAPSHOT_VERSION
+    from .assessment_start import SNAPSHOT_VERSION, LEGACY_SNAPSHOT_VERSION
     from .baseline_catalog import fingerprint
 
     def deny(reason):
@@ -312,9 +317,9 @@ def verify_start_snapshot_integrity(authorization, request, snapshot):
 
     if (
         type(authorization.snapshot_version) is not int
-        or authorization.snapshot_version != SNAPSHOT_VERSION
+        or authorization.snapshot_version not in (SNAPSHOT_VERSION, LEGACY_SNAPSHOT_VERSION)
         or type(snapshot.get("schema_version")) is not int
-        or snapshot["schema_version"] != SNAPSHOT_VERSION
+        or snapshot["schema_version"] != authorization.snapshot_version
     ):
         return deny("start_snapshot_version_mismatch")
 

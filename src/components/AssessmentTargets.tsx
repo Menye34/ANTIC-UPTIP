@@ -338,10 +338,11 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
         <h2>Review &amp; Authorization</h2>
         <dl className="target-counts">
           <div><dt>Total targets</dt><dd>{data.counts.total}</dd></div>
-          <div><dt>Eligible targets</dt><dd>{data.counts.eligible}</dd></div>
+          <div><dt>In-scope targets</dt><dd>{data.targets.filter(target => target.scope_status === 'in_scope').length}</dd></div>
           <div><dt>Blocked targets</dt><dd>{data.counts.blocked}</dd></div>
         </dl>
         <h3>Prepared testing activities</h3>
+        {readiness && <p>{new Set(readiness.start_review.eligible_activities.map(activity => activity.target_id)).size} targets eligible for scheduling; {readiness.start_review.excluded_targets.length} targets excluded from Start.</p>}
         {!readiness && !readinessError && (
           <p role="status">Checking assessment readiness…</p>
         )}

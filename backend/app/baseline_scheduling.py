@@ -18,15 +18,29 @@ def queue_baselines(db, authorization):
     requests = []
     for activity in activities:
         target_id = UUID(activity['target_id'])
-        if (target_id not in target_ids or activity.get('status') != 'resolved'
-                or activity.get('policy', {}).get('disposition') != 'preauthorized'
-                or not activity.get('safety_evidence')
-                or not activity.get('evaluation_fingerprint')
-                or not activity.get('profile_digest')):
-            raise ValueError('Start authorization contains an invalid scheduling activity.')
-        evidence = activity['safety_evidence']
-        if not evidence.get('parameter_digest') or not evidence.get('reference'):
-            raise ValueError('Scheduling requires an immutable approved parameter reference.')
+        if authorization.snapshot.get('purpose') == 'schedule_only':
+            from .scheduling_policy import validate_preparation
+            prep = activity.get('scheduling_preparation')
+            if (not validate_preparation(prep) or target_id not in target_ids
+                    or prep['assessment_id'] != str(authorization.assessment_id)
+                    or prep['target_id'] != str(target_id)
+                    or prep['evaluation_fingerprint'] != activity.get('evaluation_fingerprint')
+                    or prep['evaluation_id'] != activity.get('evaluation_id')
+                    or activity.get('status') != 'resolved'
+                    or activity.get('profile_id') != 'network-discovery'
+                    or activity.get('tool') != 'Nmap' or activity.get('activity') != 'Network Discovery'
+                    or activity.get('version') != 1):
+                raise ValueError('Invalid server-derived scheduling preparation.')
+        else:
+            if (target_id not in target_ids or activity.get('status') != 'resolved'
+                    or activity.get('policy', {}).get('disposition') != 'preauthorized'
+                    or not activity.get('safety_evidence')
+                    or not activity.get('evaluation_fingerprint')
+                    or not activity.get('profile_digest')):
+                raise ValueError('Start authorization contains an invalid scheduling activity.')
+            evidence = activity['safety_evidence']
+            if not evidence.get('parameter_digest') or not evidence.get('reference'):
+                raise ValueError('Scheduling requires an immutable approved parameter reference.')
         request = BaselineExecutionRequest(
             id=uuid4(), assessment_id=authorization.assessment_id, authorization_id=authorization.id,
             target_id=target_id, profile_id=activity['profile_id'], profile_version=activity['version'],

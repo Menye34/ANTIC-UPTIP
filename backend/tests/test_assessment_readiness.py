@@ -1,3 +1,4 @@
+from legacy_execution_fixtures import legacy_execution_endpoint_contract  # noqa: F401
 from dataclasses import replace
 from uuid import UUID
 

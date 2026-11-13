@@ -1,3 +1,8 @@
+The current restricted scheduling path is documented in [start-scheduling.md](start-scheduling.md).
+New version-3 scheduling snapshots use reproducible preparation facts in place of
+external approval/evidence records. The evidence descriptions below also document
+historical version-2 snapshots, whose receipts remain replayable.
+
 # Start and baseline scheduling
 
 The implementation is based on ab61c45 on feat/system-managed-authorization.

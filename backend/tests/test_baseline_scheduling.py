@@ -1,3 +1,4 @@
+from legacy_execution_fixtures import legacy_execution_endpoint_contract  # noqa: F401
 """Scheduling tests use synthetic governed evidence, never scanner adapters."""
 from uuid import UUID
 
