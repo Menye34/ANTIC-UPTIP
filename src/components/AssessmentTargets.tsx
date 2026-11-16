@@ -3,12 +3,11 @@ import type { FormEvent } from 'react'
 import { requestTargets } from '../services/targets'
 import {
   getAssessmentReadiness,
-  getAssessmentTesting,
   confirmAssessmentStart,
   AssessmentStartError,
 } from '../services/assessmentStart'
-import type { AssessmentReadiness, StartReceipt, TestingOverview } from '../services/assessmentStart'
-import type { Target } from '../services/targets'
+import type { AssessmentReadiness, StartReceipt } from '../services/assessmentStart'
+import type { Target, BaselineAssignment } from '../services/targets'
 import draftIcon from '../assets/assessment/target-draft.svg'
 import { ScopeError, scopeInputError } from '../services/scope'
 import './AuthorizedScope.css'
@@ -19,9 +18,6 @@ const baselineLabels = {
   requires_revalidation: 'Requires Revalidation', unavailable: 'Unavailable',
   no_compatible_baseline: 'No compatible baseline',
 }
-
-const executionLabels = { queued: 'Queued', in_progress: 'Running', completed: 'Completed',
-  failed: 'Failed', stopped: 'Stopped', blocked: 'Blocked', cancelled: 'Cancelled' } as const
 
 const scopeLabels = { in_scope: 'In scope', out_of_scope: 'Out of scope', requires_revalidation: 'Requires revalidation' }
 
@@ -44,10 +40,8 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState('')
   const [startReceipt, setStartReceipt] = useState<StartReceipt>()
-  const [testing, setTesting] = useState<TestingOverview>()
-  const [testingError, setTestingError] = useState('')
-  const [testingLoading, setTestingLoading] = useState(false)
-  const [testingAttempt, setTestingAttempt] = useState(0)
+  const [selectedBaseline, setSelectedBaseline] = useState<{ target: Target; assignment: BaselineAssignment } | null>(null)
+  const baselineDialog = useRef<HTMLDialogElement>(null)
   const lifecycle = startReceipt?.lifecycle_status ?? data?.status
   const isDraft = lifecycle === 'Draft'
   const isTesting = lifecycle === 'Testing'
@@ -135,38 +129,12 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
     return () => controller.abort()
   }, [id, data, isDraft, startReceipt, readinessAttempt, onExpired])
   useEffect(() => {
-    if (!isTesting) return
-    const controller = new AbortController()
-    let timer: number | undefined
-    let stopped = false
-    async function load() {
-      setTestingLoading(true)
-      setTestingError('')
-      try {
-        const result = await getAssessmentTesting(id, controller.signal)
-        if (!controller.signal.aborted) setTesting(result)
-      } catch (failure) {
-        if (controller.signal.aborted) return
-        setTesting(undefined)
-        if (failure instanceof AssessmentStartError && failure.status === 401) {
-          stopped = true
-          onExpired()
-        } else {
-          setTestingError('Unable to load current execution status. Refresh to try again.')
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setTestingLoading(false)
-          if (!stopped) timer = window.setTimeout(() => void load(), 15000)
-        }
-      }
-    }
-    void Promise.resolve().then(() => { if (!controller.signal.aborted) return load() })
-    return () => { controller.abort(); window.clearTimeout(timer) }
-  }, [id, isTesting, testingAttempt, onExpired])
-  useEffect(() => {
     if (removing && !dialog.current?.open) dialog.current?.showModal()
   }, [removing])
+  useEffect(() => {
+    if (selectedBaseline && !baselineDialog.current?.open) baselineDialog.current?.showModal()
+    if (!selectedBaseline && baselineDialog.current?.open) baselineDialog.current.close()
+  }, [selectedBaseline])
 
   useEffect(() => {
     if (startOpen && !startDialog.current?.open) {
@@ -323,8 +291,8 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
   return <div className="authorized-scope assessment-targets">
     <nav aria-label="Breadcrumb"><a href={overview + '/scope'}>Setup</a> <span aria-hidden="true">›</span> Assessment Targets</nav>
     <header className="scope-heading">
-      <div><h1>Assessment Targets</h1><p>Explicitly add targets, review system-prepared baselines and authorize testing.</p>
-        <a className="scope-secondary" href={overview + '/scope'}>Back to Authorized Scope</a></div>
+      <div><h1>Assessment Targets</h1><p>{isDraft ? 'Add targets, review their baselines, and start testing.' : 'Review the targets and baselines for this assessment.'}</p>
+        <a className="scope-secondary target-back-link" href={overview + '/scope'}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M5 12h14"/></svg>Back to Authorized Scope</a></div>
       {data && <span className="assessment-badge"><img src={draftIcon} alt="" />{lifecycle}</span>}
     </header>
     {error && <div className="analyst-card" role="alert"><p>{error}</p><button className="analyst-link" onClick={() => {
@@ -335,7 +303,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
     {data && <>
       <section className="analyst-card target-list">
         <h2>Assessment Targets</h2>
-        <p>Add targets explicitly. UPTIP automatically classifies and checks each target against scope.</p>
+        <p>{isDraft ? 'Add the targets you want to test. UPTIP will check if they are within the authorized scope.' : 'Targets included in this assessment.'}</p>
         {canEdit && <form onSubmit={submit} noValidate>
           <div className="scope-input-row">
             <input ref={field} aria-label={editing ? 'Edit target' : 'Target'} value={value} disabled={busy} maxLength={1024}
@@ -350,61 +318,54 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
           {fieldError && <small id="target-error" className="scope-field-error" role="alert">{fieldError}</small>}
         </form>}
         <table aria-label="Registered targets"><thead><tr>
-          {['Target', 'Type', 'Scope status', 'Eligibility', 'Actions'].map(label => <th scope="col" key={label}>{label}</th>)}
+          {(canEdit ? ['Target', 'Type', 'Scope status', 'Eligibility', 'Actions'] : ['Target', 'Type', 'Scope status', 'Eligibility']).map(label => <th scope="col" key={label}>{label}</th>)}
         </tr></thead><tbody>
           {data.targets.map(target => <tr key={target.id}>
             <td>{target.normalized_value}</td><td>{target.kind}</td>
             <td title={target.classification_reason}>{scopeLabels[target.scope_status]}</td>
-            <td data-eligibility={target.eligibility}>{target.eligibility === 'pending' ? 'Pending' : 'Blocked'}</td>
-            <td><div className="scope-actions">{canEdit && <>
+            <td data-eligibility={target.eligibility}>{isTesting && target.eligibility === 'pending' ? 'Not recorded' : target.eligibility === 'pending' ? 'Pending' : 'Blocked'}</td>
+            {canEdit && <td><div className="scope-actions">
               <button className="analyst-link" aria-label={'Edit ' + target.normalized_value} disabled={busy} onClick={() => {
                 setEditing(target); setValue(target.original_value); setFieldError(''); field.current?.focus()
               }}>Edit</button>
               <button className="analyst-link" aria-label={'Remove ' + target.normalized_value} disabled={busy}
                 onClick={() => setRemoving(target)}>Remove</button>
-            </>}</div></td>
+            </div></td>}
           </tr>)}
-          {!data.targets.length && <tr><td colSpan={5}>No targets added. Add a target to begin system preparation.</td></tr>}
+          {!data.targets.length && <tr><td colSpan={canEdit ? 5 : 4}>{isDraft ? 'No targets added. Add a target to begin system preparation.' : 'No targets recorded for this assessment.'}</td></tr>}
         </tbody></table>
-        <small>Invalid or duplicate entries are rejected; blocked targets remain available for correction.</small>
       </section>
       <section className="analyst-card target-baselines">
         <h2>Baseline Resolution</h2>
-        <p>System-managed • Compatible baselines are resolved automatically.</p>
-        {data.targets.length ? <table aria-label="Target baseline status"><thead><tr>
-          {['Target', 'Baseline', 'Status'].map(label => <th scope="col" key={label}>{label}</th>)}
-        </tr></thead><tbody>{data.targets.map(target => <tr key={target.id}>
-          <td>{target.normalized_value}</td>
-          <td colSpan={2}>{target.baseline_assignments?.length ? <ul className="baseline-assignments">
-            {target.baseline_assignments.map(assignment => <li key={assignment.profile_id}>
-              <strong>{assignment.tool} · {assignment.activity} · v{assignment.version}</strong>
-              <span>{baselineLabels[assignment.status]} — {assignment.reason}</span>
-            </li>)}
-          </ul> : baselineLabels[target.baseline_summary ?? target.eligibility]}</td>
-        </tr>)}</tbody></table> : <p>No baselines resolved yet. Add assessment targets to allow UPTIP to automatically determine their compatible testing baselines.</p>}
+        <p>UPTIP automatically selects a suitable baseline for each target.</p>
+        {data.targets.length ? <div className="target-table-scroll"><table aria-label="Target baseline status"><thead><tr>
+          {['Target', 'Baseline', 'Status', 'Actions'].map(label => <th scope="col" key={label}>{label}</th>)}
+        </tr></thead><tbody>{data.targets.flatMap(target => {
+          const assignments = target.baseline_assignments ?? []
+          return assignments.length ? assignments.map(assignment => <tr key={target.id + ':' + assignment.profile_id}>
+            <td>{target.normalized_value}</td>
+            <td>{assignment.tool} · {assignment.activity} · v{assignment.version}</td>
+            <td><span className="baseline-status" data-baseline-status={assignment.status}>{baselineLabels[assignment.status]}</span></td>
+            <td className="baseline-actions-cell"><button type="button" className="analyst-link" onClick={() => setSelectedBaseline({ target, assignment })}>View Details</button></td>
+          </tr>) : [<tr key={target.id}><td>{target.normalized_value}</td><td>Not assigned</td>
+            <td>{baselineLabels[target.baseline_summary ?? target.eligibility]}</td><td>—</td></tr>]
+        })}</tbody></table></div> : <p>{isDraft ? 'Add targets to let UPTIP select their baselines.' : 'No baselines recorded for this assessment.'}</p>}
       </section>
       <section className="analyst-card">
         <h2>{isTesting ? 'Assessment Started' : 'Review & Authorization'}</h2>
-        <dl className="target-counts">
+        {isTesting ? <>
+          <p>Assessment started successfully.</p>
+          <dl className="target-counts">
+            <div><dt>Total targets</dt><dd>{data.counts.total}</dd></div>
+            <div><dt>Included targets</dt><dd>{startReceipt ? startReceipt.authorized_target_count : 'Not available'}</dd></div>
+            <div><dt>Excluded targets</dt><dd>{startReceipt ? startReceipt.excluded_target_count : 'Not available'}</dd></div>
+          </dl>
+          <button className="analyst-create" type="button" disabled title="Testing page is not yet available">Go to Testing</button>
+        </> : <dl className="target-counts">
           <div><dt>Total targets</dt><dd>{data.counts.total}</dd></div>
           <div><dt>In-scope targets</dt><dd>{data.targets.filter(target => target.scope_status === 'in_scope').length}</dd></div>
           <div><dt>Blocked targets</dt><dd>{data.counts.blocked}</dd></div>
-        </dl>
-        {isTesting && <>
-          <p>The assessment has entered the Testing phase. Authorized baseline activities have been scheduled.</p>
-          <p>Scheduling does not mean a scanner has started.</p>
-          <h3>Latest retrieved execution status</h3>
-          {testingLoading && <p role="status">Updating execution status…</p>}
-          {testing && testing.assessment_id === id && <dl className="target-counts">
-            {(Object.keys(executionLabels) as Array<keyof typeof executionLabels>).map(state => (
-              <div key={state}><dt>{executionLabels[state]}</dt><dd>{testing.counts[state]}</dd></div>
-            ))}
-          </dl>}
-          {testingError && <p role="alert">{testingError}</p>}
-          <button type="button" className="analyst-link" disabled={testingLoading}
-            onClick={() => setTestingAttempt(n => n + 1)}>Refresh execution status</button>
-          <small> Status refreshes automatically every 15 seconds.</small>
-        </>}
+        </dl>}
         {isDraft && <>
         <h3>Prepared testing activities</h3>
         {readiness && <p>{new Set(readiness.start_review.eligible_activities.map(activity => activity.target_id)).size} targets eligible for scheduling; {readiness.start_review.excluded_targets.length} targets excluded from Start.</p>}
@@ -513,20 +474,10 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
             Start Assessment
           </button>
           <small>
-            Explicit analyst authorization and final checks are required.
+            Review your targets and confirm to start testing.
           </small>
         </div>
         </>}
-        {startReceipt && (
-          <div className="scope-success" role="status">
-            <strong>{startReceipt.lifecycle_status === 'Testing' ? 'Start confirmed' : 'Assessment Ready'}</strong>
-            <p>
-              {startReceipt.lifecycle_status === 'Testing'
-                ? `${startReceipt.queued_execution_count} baseline activities queued at confirmation. This historical receipt is not the current execution status. Scanner dispatch requires separate checks.`
-                : `${startReceipt.authorized_activity_count} activities included in the earlier Start authorization.`}
-            </p>
-          </div>
-        )}
 
       </section>
     </>}
@@ -623,6 +574,23 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       </div>
     </dialog>}
 
+    {selectedBaseline && <dialog ref={baselineDialog} className="baseline-details-dialog" aria-labelledby="baseline-details-title"
+      onCancel={event => { event.preventDefault(); setSelectedBaseline(null) }}>
+      <div className="baseline-panel-header"><h2 id="baseline-details-title">Baseline Details</h2>
+        <button type="button" className="analyst-link" onClick={() => setSelectedBaseline(null)} aria-label="Close baseline details">Close</button></div>
+      <p>System-managed baseline</p>
+      <h3>{selectedBaseline.assignment.activity} · v{selectedBaseline.assignment.version}</h3>
+      <dl className="baseline-panel-fields">
+        <div><dt>Target</dt><dd>{selectedBaseline.target.normalized_value}</dd></div>
+        <div><dt>Tool</dt><dd>{selectedBaseline.assignment.tool}</dd></div>
+        <div><dt>Profile</dt><dd>{selectedBaseline.assignment.profile_id}</dd></div>
+        <div><dt>Status</dt><dd>{baselineLabels[selectedBaseline.assignment.status]}</dd></div>
+        <div><dt>Baseline information</dt><dd>{selectedBaseline.assignment.reason}</dd></div>
+
+        <div><dt>Prepared testing activities</dt><dd>{selectedBaseline.assignment.activity}</dd></div>
+        <div><dt>Applicable restrictions</dt><dd>Testing is limited to the authorized scope and approved policy.</dd></div>
+      </dl>
+    </dialog>}
     {removing && <dialog ref={dialog} aria-labelledby="remove-target-title" onCancel={event => {
       event.preventDefault()
       if (!busy) closeRemoval()

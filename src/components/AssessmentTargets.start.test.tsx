@@ -126,10 +126,12 @@ it('accepts Testing, preserves exclusions and submits session CSRF and explicit 
   fireEvent.click(start)
   expect(await screen.findByText(/Outside authorized scope/)).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: 'Confirm Start Assessment' }))
-  expect(await screen.findByText('Start confirmed')).toBeVisible()
-  expect(screen.getByText(/1 baseline activities queued at confirmation/)).toBeVisible()
-  await screen.findByText('Latest retrieved execution status')
-  await waitFor(() => expect(count('Queued')).toHaveTextContent('1'))
+  expect(await screen.findByRole('heading', { name: 'Assessment Started' })).toBeVisible()
+  expect(await screen.findByRole('heading', { name: 'Assessment Started' })).toBeVisible()
+  expect(count('Included targets')).toHaveTextContent('1')
+  expect(count('Excluded targets')).toHaveTextContent('1')
+  expect(screen.getByRole('button', { name: 'Go to Testing' })).toBeDisabled()
+  expect(screen.queryByText('Latest retrieved execution status')).not.toBeInTheDocument()
   expectNoDraftActions()
   expect(screen.getAllByText('Nmap · Network Discovery · v1')).toHaveLength(2)
   fireEvent.click(start)
@@ -216,131 +218,61 @@ it('renders backend blocker messages and excluded-target reasons without inventi
   expect(screen.getByRole('button', { name: 'Start Assessment' })).toBeDisabled()
 })
 
-it('loads persisted Testing status after reload without requesting Draft readiness or offering Start', async () => {
+it('loads persisted Testing state without requesting Draft readiness or execution monitoring', async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
-    if (url.endsWith('/testing')) return response(testingOverview({ queued: 3, in_progress: 1, completed: 2, failed: 1 }))
     if (url.endsWith('/targets')) return response(targetList('Testing'))
     throw new Error('Unexpected request: ' + url)
   })
   vi.stubGlobal('fetch', fetcher)
   render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
   expect(await screen.findByRole('heading', { name: 'Assessment Started' })).toBeVisible()
-  await waitFor(() => expect(count('Queued')).toHaveTextContent('3'))
-  expect(count('Running')).toHaveTextContent('1')
-  expect(count('Completed')).toHaveTextContent('2')
-  expect(count('Failed')).toHaveTextContent('1')
   expectNoDraftActions()
-  expect(screen.queryByText('Start confirmed')).not.toBeInTheDocument()
-  expect(screen.queryByRole('textbox', { name: 'Target' })).not.toBeInTheDocument()
-  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/readiness'))).toBe(false)
-  expect(screen.queryByRole('link', { name: /Testing/ })).not.toBeInTheDocument()
+  expect(screen.getByText('Not recorded')).toBeVisible()
+  expect(count('Included targets')).toHaveTextContent('Not available')
+  expect(count('Excluded targets')).toHaveTextContent('Not available')
+  expect(screen.getByRole('button', { name: 'Go to Testing' })).toBeDisabled()
+  expect(screen.queryByRole('button', { name: 'Refresh execution status' })).not.toBeInTheDocument()
+  expect(screen.queryByText('Queued', { selector: 'dt' })).not.toBeInTheDocument()
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/readiness') || String(url).endsWith('/testing'))).toBe(false)
 })
 
-it('refreshes persisted status automatically and manually instead of treating scheduled work as permanently Queued', async () => {
-  let checks = 0
-  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input).endsWith('/testing')) {
-      checks++
-      return response(testingOverview(checks === 1 ? { queued: 1 } : checks === 2 ? { in_progress: 1 } : { completed: 1 }))
-    }
-    return response(targetList('Testing'))
-  })
-  vi.stubGlobal('fetch', fetcher)
-  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
-  await waitFor(() => expect(count('Queued')).toHaveTextContent('1'))
-  vi.useFakeTimers()
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh execution status' })) })
-  expect(count('Queued')).toHaveTextContent('0')
-  expect(count('Running')).toHaveTextContent('1')
-  await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
-  expect(count('Queued')).toHaveTextContent('0')
-  expect(count('Running')).toHaveTextContent('0')
-  expect(count('Completed')).toHaveTextContent('1')
-  expect(checks).toBe(3)
-  expectNoDraftActions()
-})
-
-it('does not replace a valid historical Start receipt with current execution status', async () => {
+it('preserves confirmation counts without fetching live execution counters', async () => {
   let started = false
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.endsWith('/start')) { started = true; return response(receipt, 201) }
     if (url.endsWith('/readiness')) return response(readinessResponse())
-    if (url.endsWith('/testing')) return response(testingOverview({ completed: 1 }))
-    return response(targetList(started ? 'Testing' : 'Draft'))
-  }))
+    if (url.endsWith('/targets')) return response(targetList(started ? 'Testing' : 'Draft'))
+    throw new Error('Unexpected request: ' + url)
+  })
+  vi.stubGlobal('fetch', fetcher)
   render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
   await waitFor(() => expect(screen.getByRole('button', { name: 'Start Assessment' })).toBeEnabled())
   fireEvent.click(screen.getByRole('button', { name: 'Start Assessment' }))
   fireEvent.click(screen.getByRole('button', { name: 'Confirm Start Assessment' }))
-  await waitFor(() => expect(count('Completed')).toHaveTextContent('1'))
-  expect(count('Queued')).toHaveTextContent('0')
-  expect(screen.getByText(/1 baseline activities queued at confirmation/)).toBeVisible()
+  expect(await screen.findByRole('heading', { name: 'Assessment Started' })).toBeVisible()
+  expect(count('Included targets')).toHaveTextContent('1')
+  expect(count('Excluded targets')).toHaveTextContent('1')
   expectNoDraftActions()
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/testing'))).toBe(false)
 })
 
-it('handles readiness reporting an externally started assessment without showing Draft blockers', async () => {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+it('handles readiness reporting an externally started assessment without Draft blockers', async () => {
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.endsWith('/readiness')) return response({ ...readinessResponse(), lifecycle_status: 'Testing',
       reasons: [{ code: 'lifecycle_not_draft', message: 'Only Draft assessments can be started.' }],
       start_review: { ...startReview, confirmation_possible: false, mode: null, review_token: null,
-        eligible_activities: [], excluded_targets: [{ target_id: 'target', reasons: [
-          { code: 'no_eligible_activity', message: 'No activity is eligible for queued scheduling.' },
-        ] }] } })
-    if (url.endsWith('/testing')) return response(testingOverview())
-    return response(targetList())
-  }))
+        eligible_activities: [], excluded_targets: [] } })
+    if (url.endsWith('/targets')) return response(targetList())
+    throw new Error('Unexpected request: ' + url)
+  })
+  vi.stubGlobal('fetch', fetcher)
   render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
   expect(await screen.findByRole('heading', { name: 'Assessment Started' })).toBeVisible()
-  await waitFor(() => expect(count('Queued')).toHaveTextContent('1'))
   expectNoDraftActions()
-})
-
-it.each([503, 403])('shows an execution-read failure (%s) without claiming zero queued work or permitting Start', async status => {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/testing')
-    ? response({}, status) : response(targetList('Testing'))))
-  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
-  expect(await screen.findByText(/Unable to load current execution status/)).toBeVisible()
-  expect(screen.queryByText('Queued', { selector: 'dt' })).not.toBeInTheDocument()
-  expectNoDraftActions()
-})
-
-it('expires the session on unauthorized Testing reads', async () => {
-  const expired = vi.fn()
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/testing')
-    ? response({}, 401) : response(targetList('Testing'))))
-  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={expired} />)
-  await waitFor(() => expect(expired).toHaveBeenCalledOnce())
-  expectNoDraftActions()
-})
-
-it.each(['identity', 'missing', 'negative', 'inconsistent'])('rejects invalid persisted execution counts (%s)', async kind => {
-  const invalid = testingOverview()
-  if (kind === 'identity') invalid.assessment_id = 'other'
-  if (kind === 'missing') Reflect.deleteProperty(invalid.counts, 'queued')
-  if (kind === 'negative') invalid.counts.queued = -1
-  if (kind === 'inconsistent') invalid.counts.total = 20
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/testing')
-    ? response(invalid) : response(targetList('Testing'))))
-  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
-  expect(await screen.findByText(/Unable to load current execution status/)).toBeVisible()
-  expect(screen.queryByText('Queued', { selector: 'dt' })).not.toBeInTheDocument()
-  expectNoDraftActions()
-})
-
-it('removes stale counts after a failed status refresh instead of presenting them as current', async () => {
-  let fail = false
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/testing')
-    ? (fail ? response({}, 503) : response(testingOverview({ queued: 2 }))) : response(targetList('Testing'))))
-  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
-  await waitFor(() => expect(count('Queued')).toHaveTextContent('2'))
-  fail = true
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh execution status' }))
-  expect(await screen.findByText(/Unable to load current execution status/)).toBeVisible()
-  expect(screen.queryByText('Queued', { selector: 'dt' })).not.toBeInTheDocument()
-  expectNoDraftActions()
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/testing'))).toBe(false)
 })
 
 it('prevents duplicate confirmations while Start is pending and removes the confirmation action on success', async () => {

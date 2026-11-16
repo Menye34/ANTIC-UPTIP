@@ -465,7 +465,7 @@ describe('Assessment Targets', () => {
   })
 })
 
-it('shows all baseline assignments and their reasons in one target row without enabling Start', async () => {
+it('shows all baseline assignments with status-only cells without enabling Start', async () => {
   const responseData = {
     status: 'Draft', can_edit: true, counts: { total: 1, eligible: 0, blocked: 0 },
     targets: [{
@@ -483,8 +483,59 @@ it('shows all baseline assignments and their reasons in one target row without e
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(responseData)))
   renderPage(draftPath + '/targets')
   const table = await screen.findByRole('table', { name: 'Target baseline status' })
-  expect(within(table).getAllByRole('row')).toHaveLength(2)
-  expect(within(table).getByText('Resolved — Baseline prepared for review.')).toBeVisible()
-  expect(within(table).getByText('Unavailable — Required tool capability is unavailable.')).toBeVisible()
+  expect(within(table).getAllByRole('row')).toHaveLength(3)
+  expect(within(table).getByText('Resolved')).toBeVisible()
+  expect(within(table).getByText('Unavailable')).toBeVisible()
+  expect(within(table).queryByText('Baseline prepared for review.')).not.toBeInTheDocument()
+  expect(within(table).queryByText('Required tool capability is unavailable.')).not.toBeInTheDocument()
+  expect(within(table).getAllByRole('button', { name: 'View Details' })).toHaveLength(2)
   expect(screen.getByRole('button', { name: 'Start Assessment' })).toBeDisabled()
+})
+
+
+describe('Assessment Targets after Start', () => {
+  it('shows a read-only target and baseline details without polling execution status', async () => {
+    const target = {
+      id: 'post-start-target', original_value: '192.0.2.4', normalized_value: '192.0.2.4',
+      kind: 'IP address', scope_status: 'in_scope', eligibility: 'pending', revision: 1,
+      baseline_assignments: [{ profile_id: 'network-discovery', version: 1,
+        tool: 'Nmap', activity: 'Network Discovery', status: 'resolved',
+        reason: 'Baseline prepared for review.' }],
+    }
+    const fetcher = vi.fn(async (url: string) => {
+      if (url.endsWith('/targets')) return response({
+        status: 'Testing', can_edit: false, targets: [target],
+        counts: { total: 1, eligible: 0, blocked: 0 },
+      })
+      throw new Error('Unexpected request: ' + url)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const showModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
+    const close = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
+    Object.defineProperties(HTMLDialogElement.prototype, {
+      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true } },
+      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false } },
+    })
+    try {
+      renderPage(draftPath + '/targets')
+      expect(await screen.findByText('Assessment started successfully.', { exact: false })).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Add Target' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Edit 192.0.2.4' })).not.toBeInTheDocument()
+      expect(screen.getByText('Not recorded')).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Go to Testing' })).toBeDisabled()
+      expect(screen.queryByText('Refresh execution status')).not.toBeInTheDocument()
+      const baseline = screen.getByRole('table', { name: 'Target baseline status' })
+      expect(within(baseline).getAllByRole('columnheader')).toHaveLength(4)
+      fireEvent.click(within(baseline).getByRole('button', { name: 'View Details' }))
+      expect(within(screen.getByRole('dialog')).getByText('network-discovery')).toBeVisible()
+      fireEvent.click(screen.getByRole('button', { name: 'Close baseline details' }))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    } finally {
+      if (showModal) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', showModal)
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal')
+      if (close) Object.defineProperty(HTMLDialogElement.prototype, 'close', close)
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
+    }
+  })
 })
