@@ -1,3 +1,4 @@
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import socket
@@ -103,7 +104,7 @@ def test_baseline_migration_round_trip_preserves_targets(client, db, engine):
     assessment = client.post(API, headers=headers, json={'name': 'Migration check'}).json()
     path = f"{API}/{assessment['id']}/targets"
     assert client.post(path, json={'value': '192.0.2.1'}, headers=headers).status_code == 201
-    config = Config('backend/alembic.ini')
+    config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
     command.downgrade(config, '0007')
     try:
         assert not inspect(engine).has_table('baseline_assignments')

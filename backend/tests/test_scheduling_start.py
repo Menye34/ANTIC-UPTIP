@@ -223,7 +223,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
     admin=create_engine(engine.url.set(database='postgres'),isolation_level='AUTOCOMMIT')
     with admin.connect() as c:
         # The source engine has already passed the explicit disposable identity guard.
-        c.execute(text(f'CREATE DATABASE "{name}"'))
+        c.execute(text(f'CREATE DATABASE "{name}" TEMPLATE template0'))
         c.execute(text(f"COMMENT ON DATABASE \"{name}\" IS 'UPTIP disposable scheduling concurrency database'"))
     dedicated=create_engine(engine.url.set(database=name))
     settings=get_settings()
