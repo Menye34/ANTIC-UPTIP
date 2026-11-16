@@ -29,7 +29,7 @@ def queue_baselines(db, authorization):
                     or activity.get('status') != 'resolved'
                     or activity.get('profile_id') != 'network-discovery'
                     or activity.get('tool') != 'Nmap' or activity.get('activity') != 'Network Discovery'
-                    or activity.get('version') != 1):
+                    or activity.get('version') != 2):
                 raise ValueError('Invalid server-derived scheduling preparation.')
         else:
             if (target_id not in target_ids or activity.get('status') != 'resolved'

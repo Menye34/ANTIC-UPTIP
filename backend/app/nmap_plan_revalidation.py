@@ -78,6 +78,24 @@ def revalidate_nmap_plan(
                 "Execution request is unavailable."
             )
 
+        if getattr(request, 'profile_version', None) == 2:
+            from dataclasses import asdict
+            from .dispatch_verification import verify, DispatchDenied
+            try:
+                decision = verify(db, request)
+            except (DispatchDenied, ValueError, KeyError, TypeError) as exc:
+                raise ExecutionBindingError('V2 execution binding is no longer valid.') from exc
+            expected = asdict(bound_plan.plan)
+            expected['arguments'] = list(expected['arguments'])
+            if (expected != decision['plan']
+                    or bound_plan.assessment_scope_revision != decision['scope_revision']
+                    or bound_plan.target_revision != decision['target_revision']
+                    or bound_plan.policy_digest != decision['scheduling_policy_digest']
+                    or str(bound_plan.evaluation_id) != decision['evaluation_id']
+                    or bound_plan.evaluation_fingerprint != decision['evaluation_fingerprint']):
+                raise ExecutionBindingError('V2 bound plan differs from current dispatch facts.')
+            return bound_plan
+
         authorization = db.scalar(
             select(AssessmentStartAuthorization).where(
                 AssessmentStartAuthorization.id

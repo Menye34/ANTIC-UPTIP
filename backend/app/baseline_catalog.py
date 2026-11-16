@@ -25,12 +25,16 @@ class Profile:
 
 
 PROFILES = (
-    Profile('network-discovery', 1, 'Nmap', 'Network Discovery',
-            'Prepare network discovery for an explicitly authorized IPv4 target.',
-            'ipv4-discovery', ('IP address', 'Subnet'), 'Only the authorized IPv4 address or contained subnet.'),
+    Profile('network-discovery', 2, 'Nmap', 'Network Discovery',
+            'Unprivileged IPv4 host discovery with bounded XML output and no DNS.',
+            'ipv4-discovery', ('IP address',), 'Exactly one currently authorized canonical IPv4 address.'),
     Profile('web-discovery', 1, 'OWASP ZAP', 'Web Discovery',
             'Prepare passive and crawl discovery for an explicitly authorized web URL.',
             'passive-web-discovery', ('Web URL',), 'Only the exact authorized HTTP(S) URL. No host or network inference.'),
+    # Existing subnet compatibility remains preparation-only. Never dispatch v1.
+    Profile('network-discovery', 1, 'Nmap', 'Network Discovery',
+            'Prepare network discovery for an explicitly authorized IPv4 target.',
+            'ipv4-discovery', ('IP address', 'Subnet'), 'Only the authorized IPv4 address or contained subnet.'),
 )
 
 TOOL_STATES = ('enabled', 'disabled', 'unavailable', 'unknown')

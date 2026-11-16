@@ -92,7 +92,7 @@ def bind_nmap_plan(db, *, assessment_id: UUID, target_id: UUID) -> BoundNmapPlan
             if item.get("activity") == "Network Discovery"
             and item.get("tool") == "Nmap"
             and item.get("profile_id") == "network-discovery"
-            and item.get("version") == 1
+            and item.get("version") in (1, 2)
         ),
         None,
     )
@@ -107,10 +107,17 @@ def bind_nmap_plan(db, *, assessment_id: UUID, target_id: UUID) -> BoundNmapPlan
     if not evaluation_id or not evaluation_fingerprint:
         raise ExecutionBindingError("Baseline evidence is incomplete.")
 
-    plan = build_nmap_discovery_plan(
-        target=target.normalized_value,
-        approved_parameter_digest=NMAP_DISCOVERY_PARAMETER_DIGEST,
-    )
+    if activity['version'] == 2:
+        from .dispatch_policy import plan as v2_plan
+        from .nmap_execution_binding import NmapExecutionPlan
+        value = v2_plan(target.normalized_value)
+        value['arguments'] = tuple(value['arguments'])
+        plan = NmapExecutionPlan(**value)
+    else:
+        plan = build_nmap_discovery_plan(
+            target=target.normalized_value,
+            approved_parameter_digest=NMAP_DISCOVERY_PARAMETER_DIGEST,
+        )
 
     return BoundNmapPlan(
         assessment_id=assessment.id,

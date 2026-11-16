@@ -77,10 +77,10 @@ def test_resolution_lifecycle(client, db, engine, monkeypatch):
     assert any(e.decision['reason_code'] == 'tool_unavailable' for e in db.scalars(select(BaselineEvaluation)))
     db.rollback()
 
-    monkeypatch.setattr(baseline_catalog, 'PROFILES', (replace(original[0], version=2), original[1]))
+    monkeypatch.setattr(baseline_catalog, 'PROFILES', (replace(original[0], version=3), *original[1:]))
     reconcile_all(factory, 'system_reconcile')
     view = next(t for t in client.get(targets).json()['targets'] if t['id'] == ip['id'])
-    assert [a['version'] for a in view['baseline_assignments']] == [2]
+    assert [a['version'] for a in view['baseline_assignments']] == [3]
     item_url = targets + '/' + ip['id']
     response = client.patch(item_url, json={'value': '198.51.100.2', 'revision': 1}, headers=headers)
     assert response.status_code == 200
@@ -94,7 +94,7 @@ def test_resolution_lifecycle(client, db, engine, monkeypatch):
     assert client.request('DELETE', item_url, json={'revision': 2, 'confirmed': True}, headers=headers).status_code == 200
     assert not db.scalars(select(BaselineAssignment).where(BaselineAssignment.target_id == UUID(ip['id']))).all()
     history = db.scalars(select(BaselineEvaluation).where(BaselineEvaluation.target_id == UUID(ip['id']))).all()
-    assert {event.decision['profile']['version'] for event in history} == {1, 2}
+    assert {event.decision['profile']['version'] for event in history} == {1, 2, 3}
     assert all(event.decision['profile']['digest'] for event in history)
 
 

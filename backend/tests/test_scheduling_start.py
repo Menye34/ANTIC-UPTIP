@@ -50,7 +50,7 @@ def test_full_start_and_replay_with_no_deployment_records(client, db, prepared):
     activity=review['eligible_activities'][0]
     assert activity['safety_evidence'] is None
     prep=activity['scheduling_preparation']
-    assert prep['plan']['arguments']==['-sn'] and prep['units']==1
+    assert prep['plan']['arguments']==['-sn','-n','-oX','-'] and prep['units']==1
     for model in (ExecutionPolicyVersion,SystemPolicyAuthorizationRecord,AssessmentStartEvidenceRecord):
         assert db.scalar(select(func.count()).select_from(model))==0
     key=str(uuid4())
@@ -68,7 +68,7 @@ def test_full_start_and_replay_with_no_deployment_records(client, db, prepared):
     assert len(client.get(path+'/testing/executions').json())==1
     from app.nmap_dispatch_authorization import verify_nmap_dispatch_authorization
     decision=verify_nmap_dispatch_authorization(db,execution_request_id=UUID(receipt['queued_execution_ids'][0]))
-    assert decision.authorized is False and decision.reason_code=='dispatch_safety_checks_pending'
+    assert decision.authorized is False and decision.reason_code=='worker_ownership_required'
 
 
 def test_partial_excludes_outside_and_unsupported_targets(client, db, prepared):
@@ -95,12 +95,12 @@ def test_stale_review_cannot_start(client,db,prepared,monkeypatch,change):
     elif change=='tool':
         record_tool_state(db,'Nmap','disabled',[]);db.commit()
     elif change=='parameters':
-        from app.nmap_discovery_profile import NMAP_DISCOVERY_PROFILE
-        monkeypatch.setitem(NMAP_DISCOVERY_PROFILE,'arguments',['-sV'])
+        from app.dispatch_policy import PARAMETERS
+        monkeypatch.setitem(PARAMETERS,'arguments',['-sV'])
     elif change=='prerequisite':
         monkeypatch.setattr(scheduling_policy,'REQUIRED_CHECKS',(*scheduling_policy.REQUIRED_CHECKS,'unknown'))
     else:
-        monkeypatch.setattr(scheduling_policy,'POLICY_VERSION',2)
+        monkeypatch.setattr(scheduling_policy,'POLICY_VERSION',3)
     result=confirm(client,path,headers,review)
     assert result.status_code==409
     assert db.scalar(select(Assessment.status))=='Draft'
@@ -385,7 +385,13 @@ def test_scheduling_tool_writer_waits_for_confirmation_commit(scheduling_concurr
 
 def test_testing_overview_stays_on_one_snapshot_during_scheduling(scheduling_concurrency):
     from fastapi.testclient import TestClient
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
     app,factory,(path,headers,_),review,cookies=scheduling_concurrency
+    config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
+    config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
+    command.upgrade(config,'0019')
     engine=factory.kw['bind']
     started=False
     with TestClient(app,base_url='https://testserver',cookies=cookies) as writer:

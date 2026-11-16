@@ -84,7 +84,7 @@ def test_full_persistence_and_processing_completion(db,queued):
 
 
 @pytest.mark.parametrize('change',[{'status':'invented'},{'assessment_id':uuid4()},
-    {'target_id':uuid4()},{'request_id':uuid4()},{'profile_version':2},
+    {'target_id':uuid4()},{'request_id':uuid4()},{'profile_version':3},
     {'parameters':{'target':'192.0.2.1','arguments':['-sV']}},{'parameter_digest':'b'*64},
     {'timeout_seconds':0},{'attempt_number':0}])
 def test_invalid_attempts_fail_closed(db,queued,change):
@@ -330,7 +330,7 @@ def test_persistence_does_not_enable_dispatch_or_runtime_authorization(db,queued
         guard.setattr(subprocess,'Popen',forbidden)
         decision=verify_nmap_dispatch_authorization(db,execution_request_id=queued.id)
         state=load_nmap_runtime_state(db,bound_plan=bound,execution_request_id=queued.id)
-    assert decision.authorized is False and decision.reason_code=='dispatch_safety_checks_pending'
+    assert decision.authorized is False and decision.reason_code=='worker_ownership_required'
     assert state.authorization_valid is False
     assert db.scalar(select(Assessment.status))=='Testing'
     assert db.get(BaselineExecutionRequest,queued.id).status=='Queued'

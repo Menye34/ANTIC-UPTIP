@@ -20,6 +20,9 @@ def load_nmap_runtime_state(
     *,
     bound_plan: BoundNmapPlan,
     execution_request_id,
+    attempt_id=None,
+    worker_id=None,
+    claim_id=None,
 ) -> RuntimeSafetyState:
     """Evaluate persisted runtime conditions without granting authorization."""
 
@@ -76,14 +79,19 @@ def load_nmap_runtime_state(
 
     if scope_unchanged and target_unchanged:
         try:
-            revalidate_nmap_plan(db, bound_plan=bound_plan)
+            revalidate_nmap_plan(db, bound_plan=bound_plan, execution_request_id=execution_request_id)
             binding_current = True
         except Exception:
             binding_current = False
 
-    # Deliberately fail closed until trusted system-managed
-    # dispatch authorization is implemented and verified.
+    # Legacy and unowned calls remain denied. V2 additionally requires the
+    # independent release policy and a live matching worker claim.
     authorization_valid = False
+    if request is not None and request.profile_version == 2:
+        from .nmap_dispatch_authorization import verify_nmap_dispatch_authorization
+        authorization_valid = verify_nmap_dispatch_authorization(db,
+            execution_request_id=execution_request_id, attempt_id=attempt_id,
+            worker_id=worker_id, claim_id=claim_id).authorized
 
     return RuntimeSafetyState(
         scope_unchanged=bool(scope_unchanged),

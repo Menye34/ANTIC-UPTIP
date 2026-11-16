@@ -27,6 +27,9 @@ def verify_nmap_dispatch_authorization(
     db,
     *,
     execution_request_id: UUID,
+    attempt_id=None,
+    worker_id=None,
+    claim_id=None,
 ) -> DispatchAuthorizationDecision:
     """Verify dispatch prerequisites, denying by default."""
 
@@ -42,6 +45,17 @@ def verify_nmap_dispatch_authorization(
 
         if request is None:
             return deny("execution_request_not_found")
+
+        if getattr(request, 'profile_version', None) == 2:
+            from .dispatch_verification import verify
+            from .models import ExecutionAttempt
+            if attempt_id is None or worker_id is None or claim_id is None:
+                return deny('worker_ownership_required')
+            attempt = db.get(ExecutionAttempt, attempt_id)
+            if attempt is None:
+                return deny('worker_ownership_required')
+            verify(db, request, attempt=attempt, worker_id=worker_id, claim_id=claim_id)
+            return DispatchAuthorizationDecision(True, 'v2_dispatch_policy_verified')
 
         if request.status != "Queued":
             return deny("execution_request_not_queued")

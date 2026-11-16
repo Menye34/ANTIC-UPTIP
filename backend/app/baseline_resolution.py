@@ -12,8 +12,13 @@ def tool_states(db):
 
 
 def compatible_profiles(target):
-    return sorted((profile for profile in baseline_catalog.PROFILES if target.kind in profile.kinds),
-                  key=lambda profile: profile.key)
+    # A stable profile key has one current version per compatible target kind.
+    # Older immutable definitions remain available for historical inspection.
+    current = {}
+    for profile in baseline_catalog.PROFILES:
+        if target.kind in profile.kinds and (profile.key not in current or profile.version > current[profile.key].version):
+            current[profile.key] = profile
+    return [current[key] for key in sorted(current)]
 
 
 def evaluate(target, scope_revision, profile, tool):

@@ -1,27 +1,17 @@
-"""Version 1 permits queued preparation only, never scanner execution.
+"""Version 2 permits queued v2 preparation only, never scanner execution.
 
 Application-release policy, deliberately independent of execution approvals.
 Only one canonical IPv4 address and the reviewed -sn profile are supported.
 """
 from dataclasses import asdict
-from .baseline_catalog import Profile, fingerprint
-from .nmap_execution_binding import build_nmap_discovery_plan, ExecutionBindingError
+from .baseline_catalog import fingerprint
+from .nmap_execution_binding import ExecutionBindingError
 
 POLICY_ID = 'uptip-baseline-scheduling'
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 PREPARATION_VERSION = 1
 # Independent release-owned definitions: do not derive trust from mutable input.
-_PROFILE = Profile('network-discovery', 1, 'Nmap', 'Network Discovery',
-    'Prepare network discovery for an explicitly authorized IPv4 target.',
-    'ipv4-discovery', ('IP address', 'Subnet'),
-    'Only the authorized IPv4 address or contained subnet.')
-_PARAMETER_DEFINITION = {
-    'profile_id': 'network-discovery', 'profile_version': 1, 'tool': 'Nmap',
-    'activity': 'Network Discovery', 'capability': 'ipv4-discovery',
-    'target_kind': 'IP address', 'arguments': ['-sn'], 'risk': 'low',
-    'max_units': 1, 'allow_port_scanning': False, 'allow_scripts': False,
-    'allow_target_expansion': False,
-}
+from .dispatch_policy import PROFILE as _PROFILE, PARAMETERS as _PARAMETER_DEFINITION, plan as dispatch_plan
 REQUIRED_CHECKS = ('scope_current', 'baseline_current', 'tool_capable', 'restricted_plan')
 
 
@@ -60,9 +50,8 @@ def prepare(assessment, target, activity, evaluation, tool, scope_status, scope_
     if (tool is None or tool.state != 'enabled' or 'ipv4-discovery' not in tool.capabilities):
         return None, blocked('scheduling_tool_unavailable', 'A trusted enabled IPv4 discovery capability is required.')
     try:
-        plan = build_nmap_discovery_plan(target=target.normalized_value,
-                    approved_parameter_digest=fingerprint(_PARAMETER_DEFINITION))
-    except ExecutionBindingError:
+        plan = _build(target.normalized_value)
+    except (ExecutionBindingError, ValueError):
         return None, blocked('scheduling_parameters_invalid', 'Prepared parameters do not match the restricted scheduling profile.')
     checks = {'scope_current', 'baseline_current', 'tool_capable', 'restricted_plan'}
     if set(REQUIRED_CHECKS) != checks:
@@ -94,8 +83,7 @@ def validate_preparation(facts):
         return False
     try:
         content = {key: value for key, value in facts.items() if key != 'fingerprint'}
-        plan = build_nmap_discovery_plan(target=facts['target_value'],
-                    approved_parameter_digest=fingerprint(_PARAMETER_DEFINITION))
+        plan = _build(facts['target_value'])
         expected_plan = {**asdict(plan), 'arguments': list(plan.arguments)}
         return (facts['fingerprint'] == fingerprint(content)
                 and facts['schema_version'] == PREPARATION_VERSION
@@ -110,3 +98,10 @@ def validate_preparation(facts):
                 and set(REQUIRED_CHECKS) == {'scope_current','baseline_current','tool_capable','restricted_plan'})
     except (KeyError, TypeError, ValueError):
         return False
+
+
+def _build(target):
+    from .nmap_execution_binding import NmapExecutionPlan
+    value = dispatch_plan(target)
+    value['arguments'] = tuple(value['arguments'])
+    return NmapExecutionPlan(**value)
