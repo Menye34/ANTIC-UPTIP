@@ -323,6 +323,7 @@ class BaselineExecutionRequest(Base):
     __tablename__ = 'baseline_execution_requests'
     __table_args__ = (
         UniqueConstraint('authorization_id', 'target_id', 'profile_id', name='uq_baseline_execution_activity'),
+        UniqueConstraint('id', 'assessment_id', 'target_id', name='uq_execution_request_binding'),
         CheckConstraint("status IN ('Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled')",
                         name='ck_baseline_execution_status'),
         CheckConstraint('profile_version > 0', name='ck_baseline_execution_profile_version'),
@@ -346,3 +347,10 @@ class BaselineExecutionRequest(Base):
     authorized_activity: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# Register automatic-execution persistence without changing scheduling behavior.
+from .execution_persistence import (
+    ExecutionAttempt, ScannerEvidence, ResultProcessingOutcome,
+    SecurityObservation, ExecutionEvent,
+)
