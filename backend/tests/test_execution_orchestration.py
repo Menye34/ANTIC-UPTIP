@@ -233,6 +233,7 @@ def test_v1_contract_is_not_reinterpreted(db, request_row):
 
 def test_least_privilege_worker_can_finish_without_authentication_secrets(db, request_row, tmp_path):
     db.execute(text('CREATE ROLE uptip_phase2_test_worker NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS'))
+    db.execute(text('GRANT uptip_phase2_test_worker TO uptip WITH SET TRUE, INHERIT FALSE'))
     db.execute(text('GRANT USAGE ON SCHEMA public TO uptip_phase2_test_worker'))
     db.execute(text('GRANT SELECT(id,status,role,password_change_required) ON users TO uptip_phase2_test_worker'))
     db.execute(text('GRANT SELECT ON assessments, assessment_targets, scope_entries, assessment_start_authorizations, baseline_assignments, baseline_evaluations, baseline_tool_states, baseline_execution_requests TO uptip_phase2_test_worker'))
