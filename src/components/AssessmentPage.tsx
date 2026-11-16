@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import AssessmentTargets from './AssessmentTargets'
+import TestingPage from './TestingPage'
 import AuthorizedScope from './AuthorizedScope'
 import AnalystShell from './AnalystShell'
 import { AssessmentRequestError, createAssessment, getAssessment } from '../services/assessments'
@@ -217,12 +218,14 @@ function Overview({ path, showCreated, onExpired }: AssessmentPageProps) {
 export default function AssessmentPage(props: AssessmentPageProps) {
   const create = props.path.endsWith('/new')
   const targets = props.path.endsWith('/targets')
+  const testing = props.path.endsWith('/testing')
   const scopeOverview = /\/(scope|targets)$/.test(props.path) ? props.path.replace(/\/(scope|targets)$/, '') : undefined
-  return <AnalystShell targetsActive={targets} scopeOverview={scopeOverview} sidebar={create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
+  return <AnalystShell testingPath={testing ? props.path : undefined} targetsActive={targets} scopeOverview={scopeOverview} sidebar={testing || create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
     initials={props.username.slice(0, 2).toUpperCase()} signingOut={props.signingOut} onSignOut={props.onSignOut}>
-    <main className={create ? 'analyst-content' : 'analyst-content assessment-overview'}>
+    <main className={testing ? 'analyst-content testing-content' : create ? 'analyst-content' : 'analyst-content assessment-overview'}>
       {props.logoutFailed && <p role="alert">Unable to sign out. Please try again.</p>}
-      {create ? <CreateForm {...props} /> : scopeOverview && targets ? <AssessmentTargets overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} />
+      {testing ? <TestingPage key={props.path} assessmentId={props.path.split('/').at(-2)!} onExpired={props.onExpired} />
+        : create ? <CreateForm {...props} /> : scopeOverview && targets ? <AssessmentTargets overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} navigate={props.navigate} />
         : scopeOverview ? <AuthorizedScope overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} /> : <Overview {...props} />}
     </main>
   </AnalystShell>

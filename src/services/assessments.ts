@@ -8,7 +8,7 @@ export interface AssessmentDraft {
 export interface Assessment extends AssessmentDraft {
   id: string
   reference: string
-  status: 'Draft'
+  status: 'Draft' | 'Ready' | 'Testing'
   lead_analyst: string
   created_by: string
   created_at: string

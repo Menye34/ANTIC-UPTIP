@@ -522,7 +522,7 @@ describe('Assessment Targets after Start', () => {
       expect(screen.queryByRole('button', { name: 'Add Target' })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Edit 192.0.2.4' })).not.toBeInTheDocument()
       expect(screen.getByText('Not recorded')).toBeVisible()
-      expect(screen.getByRole('button', { name: 'Go to Testing' })).toBeDisabled()
+      expect(screen.getByRole('link', { name: 'Go to Testing' })).toHaveAttribute('href', expect.stringContaining('/testing'))
       expect(screen.queryByText('Refresh execution status')).not.toBeInTheDocument()
       const baseline = screen.getByRole('table', { name: 'Target baseline status' })
       expect(within(baseline).getAllByRole('columnheader')).toHaveLength(4)

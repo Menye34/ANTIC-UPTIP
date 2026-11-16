@@ -5,6 +5,7 @@ import {
   getAssessmentReadiness,
   confirmAssessmentStart,
   AssessmentStartError,
+  assessmentTestingPath,
 } from '../services/assessmentStart'
 import type { AssessmentReadiness, StartReceipt } from '../services/assessmentStart'
 import type { Target, BaselineAssignment } from '../services/targets'
@@ -21,8 +22,9 @@ const baselineLabels = {
 
 const scopeLabels = { in_scope: 'In scope', out_of_scope: 'Out of scope', requires_revalidation: 'Requires revalidation' }
 
-export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
+export default function AssessmentTargets({ overview, csrfToken, onExpired, navigate }: {
   overview: string; csrfToken: string; onExpired: () => void
+  navigate?: (path: string) => void
 }) {
   const id = overview.split('/').at(-1)!
   const [data, setData] = useState<Awaited<ReturnType<typeof requestTargets>>>()
@@ -245,6 +247,10 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
       setReadiness(undefined)
       setReadinessAttempt(n => n + 1)
       setAttempt(n => n + 1)
+      if (receipt.lifecycle_status === 'Testing') {
+        // A navigation failure must not turn a confirmed Start into a retry.
+        try { navigate?.(assessmentTestingPath(id)) } catch { /* The persisted Go to Testing action remains available. */ }
+      }
     } catch (failure) {
       if (controller.signal.aborted) return
 
@@ -360,7 +366,11 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired }: {
             <div><dt>Included targets</dt><dd>{startReceipt ? startReceipt.authorized_target_count : 'Not available'}</dd></div>
             <div><dt>Excluded targets</dt><dd>{startReceipt ? startReceipt.excluded_target_count : 'Not available'}</dd></div>
           </dl>
-          <button className="analyst-create" type="button" disabled title="Testing page is not yet available">Go to Testing</button>
+          <a className="analyst-create" href={assessmentTestingPath(id)} onClick={event => {
+            if (navigate) {
+              try { navigate(assessmentTestingPath(id)); event.preventDefault() } catch { /* Fall back to the anchor's native navigation. */ }
+            }
+          }}>Go to Testing</a>
         </> : <dl className="target-counts">
           <div><dt>Total targets</dt><dd>{data.counts.total}</dd></div>
           <div><dt>In-scope targets</dt><dd>{data.targets.filter(target => target.scope_status === 'in_scope').length}</dd></div>

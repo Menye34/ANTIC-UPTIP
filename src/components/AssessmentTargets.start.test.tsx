@@ -96,7 +96,8 @@ afterEach(() => {
   else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
 })
 
-it('accepts Testing, preserves exclusions and submits session CSRF and explicit confirmation', async () => {
+it.each([false, true])('accepts Testing and preserves confirmed Start when navigation fails: %s', async navigationFails => {
+  const navigate = vi.fn(() => { if (navigationFails) throw new Error('synthetic-navigation-failure') })
   let started = false
   const fetcher = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
     const url = String(input)
@@ -118,7 +119,7 @@ it('accepts Testing, preserves exclusions and submits session CSRF and explicit 
     return response(targetList(started ? 'Testing' : 'Draft'))
   })
   vi.stubGlobal('fetch', fetcher)
-  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
+  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} navigate={navigate} />)
   const start = await screen.findByRole('button', { name: 'Start Assessment' })
   await waitFor(() => expect(start).toBeEnabled())
   expect(screen.getByText('In-scope targets')).toBeVisible()
@@ -128,9 +129,10 @@ it('accepts Testing, preserves exclusions and submits session CSRF and explicit 
   fireEvent.click(screen.getByRole('button', { name: 'Confirm Start Assessment' }))
   expect(await screen.findByRole('heading', { name: 'Assessment Started' })).toBeVisible()
   expect(await screen.findByRole('heading', { name: 'Assessment Started' })).toBeVisible()
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(assessmentTestingPath(id))
   expect(count('Included targets')).toHaveTextContent('1')
   expect(count('Excluded targets')).toHaveTextContent('1')
-  expect(screen.getByRole('button', { name: 'Go to Testing' })).toBeDisabled()
+  expect(screen.getByRole('link', { name: 'Go to Testing' })).toHaveAttribute('href', expect.stringContaining('/testing'))
   expect(screen.queryByText('Latest retrieved execution status')).not.toBeInTheDocument()
   expectNoDraftActions()
   expect(screen.getAllByText('Nmap · Network Discovery · v1')).toHaveLength(2)
@@ -167,18 +169,20 @@ it('blocks an expired review while preserving the existing blocked Start UI', as
 })
 
 it('treats an invalid success receipt as an uncertain outcome and prevents another Start', async () => {
+  const navigate = vi.fn()
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     if (String(input).endsWith('/start')) return response({ ...receipt, assessment_id: 'other-assessment' }, 201)
     if (String(input).endsWith('/readiness')) return response({ start_review: startReview })
     return response({ status: 'Draft', can_edit: true, targets: [], counts: { total: 0, eligible: 0, blocked: 0 } })
   }))
-  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
+  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} navigate={navigate} />)
   const start = await screen.findByRole('button', { name: 'Start Assessment' })
   await waitFor(() => expect(start).toBeEnabled())
   fireEvent.click(start)
   fireEvent.click(await screen.findByRole('button', { name: 'Confirm Start Assessment' }))
   expect(await screen.findByText(/confirmation outcome is unknown/)).toBeVisible()
   expect(start).toBeDisabled()
+  expect(navigate).not.toHaveBeenCalled()
 })
 
 it('refreshes an expired review without bypassing backend eligibility', async () => {
@@ -231,7 +235,7 @@ it('loads persisted Testing state without requesting Draft readiness or executio
   expect(screen.getByText('Not recorded')).toBeVisible()
   expect(count('Included targets')).toHaveTextContent('Not available')
   expect(count('Excluded targets')).toHaveTextContent('Not available')
-  expect(screen.getByRole('button', { name: 'Go to Testing' })).toBeDisabled()
+  expect(screen.getByRole('link', { name: 'Go to Testing' })).toHaveAttribute('href', expect.stringContaining('/testing'))
   expect(screen.queryByRole('button', { name: 'Refresh execution status' })).not.toBeInTheDocument()
   expect(screen.queryByText('Queued', { selector: 'dt' })).not.toBeInTheDocument()
   expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/readiness') || String(url).endsWith('/testing'))).toBe(false)

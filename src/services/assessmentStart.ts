@@ -73,7 +73,7 @@ export class AssessmentStartError extends Error {
   }
 }
 
-async function startRequest<T>(
+export async function startRequest<T>(
   assessmentId: string,
   endpoint: string,
   signal: AbortSignal,
@@ -188,7 +188,7 @@ export async function confirmAssessmentStart(
   return receipt
 }
 
-// AssessmentPage does not yet implement the approved Testing view.
+// Frontend route; never use the receipt's API URL as a browser destination.
 export function assessmentTestingPath(assessmentId: string) {
   return '/analyst/assessments/' + encodeURIComponent(assessmentId) + '/testing'
 }
