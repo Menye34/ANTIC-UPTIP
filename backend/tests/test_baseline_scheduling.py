@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import Assessment, AssessmentStartAuthorization, AssessmentStartEvent, BaselineExecutionRequest
 from test_assessment_start import start_case, confirmation, review  # noqa: F401
+from test_scheduling_start import prepared as scheduling_prepared, get_review as scheduling_get_review
 
 
 def count_for_assessment(db, model, path):
@@ -170,14 +171,16 @@ def test_concurrent_start_has_one_authorization_and_queue(engine, monkeypatch, s
         with factory() as session:
             yield session
 
+    from app import assessment_routes, assessment_readiness
+    monkeypatch.setattr(assessment_routes, 'evaluate_readiness', assessment_readiness.evaluate_readiness)
     app = create_app()
     app.dependency_overrides[get_db] = independent_db
     try:
         with factory() as setup_db, TestClient(app, base_url='https://testserver') as setup_client:
             setup_client.headers['Origin'] = 'https://testserver'
-            path, headers, _, _, _ = start_case.__wrapped__(setup_client, setup_db, monkeypatch)
+            path, headers, _ = scheduling_prepared.__wrapped__(setup_client, setup_db, monkeypatch)
             setup_db.commit()
-            review_data = review(setup_client, path)
+            review_data = scheduling_get_review(setup_client, path)['start_review']
             assert review_data['confirmation_possible'] and review_data['mode'] in ('full', 'partial'), review_data
             body = confirmation(review_data)
             cookies = dict(setup_client.cookies)
@@ -218,14 +221,16 @@ def test_overview_keeps_one_snapshot_during_start(engine, monkeypatch):
         with factory() as session:
             yield session
 
+    from app import assessment_routes, assessment_readiness
+    monkeypatch.setattr(assessment_routes, 'evaluate_readiness', assessment_readiness.evaluate_readiness)
     app = create_app()
     app.dependency_overrides[get_db] = independent_db
     try:
         with factory() as setup_db, TestClient(app, base_url='https://testserver') as writer:
             writer.headers['Origin'] = 'https://testserver'
-            path, headers, _, _, _ = start_case.__wrapped__(writer, setup_db, monkeypatch)
+            path, headers, _ = scheduling_prepared.__wrapped__(writer, setup_db, monkeypatch)
             setup_db.commit()
-            review_data = review(writer, path)
+            review_data = scheduling_get_review(writer, path)['start_review']
             assert review_data['confirmation_possible'] and review_data['mode'] in ('full', 'partial'), review_data
             body = confirmation(review_data)
             started = False
