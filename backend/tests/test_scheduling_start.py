@@ -183,7 +183,11 @@ def test_legacy_receipt_replays_but_legacy_review_cannot_create_new_start(client
         old_review=get_review(client,path)['start_review']
     assert old_review['schema_version']==2
     # Recompute under the new scheduling policy rejects a formerly reviewed plan.
-    assert confirm(client,path,headers,old_review).status_code==409
+    # A legacy review with no eligible mode fails request validation before
+    # the token/snapshot conflict checks. Otherwise it reaches the 409 gate.
+    rejected = confirm(client,path,headers,old_review)
+    assert rejected.status_code == (422 if old_review['mode'] is None else 409)
+
     key=str(uuid4())
     with monkeypatch.context() as legacy:
         legacy.setattr(assessment_routes,'evaluate_readiness',assessment_readiness.evaluate_execution_readiness)
