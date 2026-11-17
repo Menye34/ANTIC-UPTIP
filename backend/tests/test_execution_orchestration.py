@@ -394,3 +394,20 @@ def test_migration_refuses_removing_recorded_process_protection(scheduling_concu
     with factory() as db:
         assert db.scalar(text('SELECT version_num FROM alembic_version')) == '0019'
         assert db.get(ExecutionAttempt, aid).process_reference == 'synthetic:123:456'
+
+
+def test_testing_overview_uses_persisted_execution_events(client, db, request_row, tmp_path):
+    """T-01 activity must reflect committed worker events, not a fabricated queue-only timeline."""
+    tmp_path.chmod(0o700)
+    runner = ExecutionRunner(BorrowedFactory(db), FakeAdapter(), EvidenceStore(tmp_path), 'synthetic')
+    assert runner.run(request_row.id)
+    url = f'/api/v1/assessments/{request_row.assessment_id}/testing'
+    response = client.get(url)
+    assert response.status_code == 200
+    activity = response.json()['recent_activity']
+    assert activity
+    assert activity[0]['event'] == 'execution_finished'
+    assert any(item['event'] == 'scanner_started' for item in activity)
+    assert all(item['execution_id'] == str(request_row.id) for item in activity)
+    assert all(set(item) == {'event', 'execution_id', 'occurred_at'} for item in activity)
+    assert all('process_reference' not in str(item) for item in activity)
