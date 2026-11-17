@@ -70,7 +70,7 @@ jobs:
       - name: Provision isolated CI-only databases and roles
         run: |
           psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
-          CREATE ROLE uptip LOGIN PASSWORD 'owner-ci-only';
+          CREATE ROLE uptip LOGIN CREATEROLE PASSWORD 'owner-ci-only';
           CREATE ROLE uptip_runtime LOGIN PASSWORD 'runtime-ci-only';
           CREATE DATABASE uptip_test_readiness_fix OWNER uptip;
           CREATE DATABASE uptip_test_concurrency OWNER uptip;
