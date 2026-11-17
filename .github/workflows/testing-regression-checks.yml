@@ -32,3 +32,55 @@ jobs:
         run: npx vitest run src/components/TestingPage.test.tsx src/TestingRoute.test.tsx
       - name: Build frontend
         run: npm run build
+
+  backend-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      UPTIP_ENVIRONMENT: test
+      UPTIP_PUBLIC_ORIGIN: https://testserver
+      UPTIP_COOKIE_SECURE: 'true'
+      UPTIP_RATE_KEY: ci-only-test-rate-key-not-for-deployment-123456
+      UPTIP_START_REVIEW_KEY: ci-only-review-signing-key-not-for-deployment-123456
+      UPTIP_DATABASE_URL: postgresql+psycopg://uptip_runtime:runtime-ci-only@127.0.0.1:5432/uptip_test_readiness_fix
+      UPTIP_MIGRATION_DATABASE_URL: postgresql+psycopg://uptip:owner-ci-only@127.0.0.1:5432/uptip_test_readiness_fix
+      UPTIP_TEST_DATABASE_URL: postgresql+psycopg://uptip:owner-ci-only@127.0.0.1:5432/uptip_test_readiness_fix
+      PGPASSWORD: postgres-ci-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install backend test dependencies
+        run: |
+          python -m pip install -r backend/requirements.txt
+          python -m pip install pytest httpx python-dotenv
+      - name: Provision isolated CI-only databases and roles
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE uptip LOGIN PASSWORD 'owner-ci-only';
+          CREATE ROLE uptip_runtime LOGIN PASSWORD 'runtime-ci-only';
+          CREATE DATABASE uptip_test_readiness_fix OWNER uptip;
+          CREATE DATABASE uptip_test_concurrency OWNER uptip;
+          COMMENT ON DATABASE uptip_test_readiness_fix IS 'UPTIP disposable integration test database';
+          COMMENT ON DATABASE uptip_test_concurrency IS 'UPTIP disposable concurrency test database';
+          SQL
+      - name: Apply test schema migrations
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Execute backend scheduling regression tests
+        working-directory: backend
+        run: |
+          python -m pytest tests/test_scheduling_start.py -q --tb=short \
+            -k 'not concurrency and not concurrent and not migration'
