@@ -85,9 +85,11 @@ def db(engine):
 
 
 @pytest.fixture
-def migration_db():
-    """Committed runtime session on the isolated migration-test database."""
-    import os
+def migration_db(monkeypatch):
+    """Fresh, marked database per invocation; never reuse committed history."""
+    import subprocess
+    from uuid import uuid4
+    from app.config import get_settings
 
     os.environ.update(
         UPTIP_ENVIRONMENT="test",
@@ -95,62 +97,77 @@ def migration_db():
         UPTIP_COOKIE_SECURE="true",
         UPTIP_RATE_KEY="test-only-not-a-deployment-secret-123456",
     )
-
-    from app.config import get_settings
     get_settings.cache_clear()
-
-    yield from _migration_db_session()
-
-
-def _migration_db_session():
-    """Committed runtime session on the dedicated migration-test database."""
-    from app.config import get_settings
-
     settings = get_settings()
     runtime_url = make_url(settings.database_url)
     migration_url = make_url(settings.migration_database_url)
-
     if not (
-        runtime_url.username == "uptip_runtime"
-        and migration_url.username == "uptip"
-        and runtime_url.database == migration_url.database == "uptip"
-        and runtime_url.host == migration_url.host == "127.0.0.1"
+        runtime_url.drivername == migration_url.drivername == 'postgresql+psycopg'
+        and runtime_url.username == 'uptip_runtime'
+        and migration_url.username == 'uptip'
+        and runtime_url.database == migration_url.database == 'uptip'
+        and runtime_url.host == migration_url.host == '127.0.0.1'
+        and runtime_url.port in (None, 5432)
+        and migration_url.port in (None, 5432)
+        and not runtime_url.query and not migration_url.query
     ):
-        pytest.fail("Unsafe migration fixture configuration")
+        pytest.fail('Unsafe migration fixture configuration')
 
-    test_url = runtime_url.set(database="uptip_test_migration_0016")
-    dedicated_engine = create_engine(test_url, hide_parameters=True)
+    name = 'uptip_test_migration_' + uuid4().hex
+    helper = Path('/usr/local/lib/uptip-test/migration_db_admin.py')
+    if not helper.is_file():
+        pytest.fail('Install the restricted migration DB admin helper before testing')
 
-    try:
-        with dedicated_engine.connect() as connection:
-            identity = connection.execute(text("""
-                SELECT current_database(),
-                       shobj_description(oid, 'pg_database')
-                FROM pg_database
-                WHERE datname = current_database()
-            """)).one()
-
-            revision = connection.scalar(
-                text("SELECT version_num FROM alembic_version")
-            )
-
-        if identity != (
-            "uptip_test_migration_0016",
-            "UPTIP disposable migration integration test database",
-        ) or revision != "0016":
-            pytest.fail("Migration database identity or revision mismatch")
-
-        factory = sessionmaker(
-            bind=dedicated_engine,
-            expire_on_commit=False,
+    def administer(action):
+        subprocess.run(
+            ['sudo', '-n', '-u', 'postgres', '/usr/bin/python3', str(helper), action, name],
+            check=True, timeout=30,
         )
 
+    administer('create')
+    dedicated = None
+    migration_engine = None
+    try:
+        test_runtime_url = runtime_url.set(database=name)
+        test_migration_url = migration_url.set(database=name)
+        migration_engine = create_engine(test_migration_url, hide_parameters=True)
+        with migration_engine.connect() as connection:
+            identity = connection.execute(text('''
+                SELECT current_database(), r.rolname,
+                       shobj_description(d.oid, 'pg_database')
+                FROM pg_database d JOIN pg_roles r ON r.oid=d.datdba
+                WHERE d.datname=current_database()
+            ''')).one()
+            assert identity == (name, 'uptip', 'UPTIP disposable isolated migration test database')
+
+        monkeypatch.setattr(settings, 'migration_database_url',
+                            test_migration_url.render_as_string(hide_password=False))
+        config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
+        command.upgrade(config, '0016')
+        dedicated = create_engine(test_runtime_url, hide_parameters=True)
+        with migration_engine.connect() as connection:
+            assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '0016'
+        monkeypatch.setattr(settings, 'database_url',
+                            test_runtime_url.render_as_string(hide_password=False))
+        factory = sessionmaker(bind=dedicated, expire_on_commit=False)
         with factory() as session:
+            session.info['migration_test_name'] = name
+            session.info['migration_test_runtime_url'] = test_runtime_url
+            session.info['migration_test_migration_url'] = test_migration_url
             yield session
             session.rollback()
-
     finally:
-        dedicated_engine.dispose()
+        if dedicated is not None:
+            dedicated.dispose()
+        if migration_engine is not None:
+            migration_engine.dispose()
+        try:
+            administer('drop')
+        except Exception as exc:
+            raise RuntimeError(
+                f'Isolated migration test database {name} could not be safely deleted; '
+                'inspect its connections and marker before manual recovery'
+            ) from exc
 
 
 @pytest.fixture

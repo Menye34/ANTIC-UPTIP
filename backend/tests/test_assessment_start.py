@@ -546,18 +546,17 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
     runtime_url = make_url(settings.database_url)
     migration_url = make_url(settings.migration_database_url)
 
+    name = migration_db.info['migration_test_name']
+    runtime_test_url = migration_db.info['migration_test_runtime_url']
+    migration_test_url = migration_db.info['migration_test_migration_url']
     if not (
-        runtime_url.username == "uptip_runtime"
-        and migration_url.username == "uptip"
-        and runtime_url.database == migration_url.database == "uptip"
-        and runtime_url.host == migration_url.host == "127.0.0.1"
-        and runtime_url.drivername == migration_url.drivername
-        == "postgresql+psycopg"
+        runtime_url == runtime_test_url
+        and migration_url == migration_test_url
+        and name.startswith('uptip_test_migration_')
+        and len(name) == len('uptip_test_migration_') + 32
+        and runtime_url.database == migration_url.database == name
     ):
-        pytest.fail("Unsafe migration test configuration")
-
-    runtime_test_url = runtime_url.set(database="uptip_test_migration_0016")
-    migration_test_url = migration_url.set(database="uptip_test_migration_0016")
+        pytest.fail('Unsafe isolated migration test configuration')
 
     original_runtime_url = settings.database_url
     original_migration_url = settings.migration_database_url
@@ -578,10 +577,11 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
             """)).one()
 
             assert identity == (
-                "uptip_test_migration_0016",
-                "UPTIP disposable migration integration test database",
+                name,
+                "UPTIP disposable isolated migration test database",
             )
 
+        with migration_engine.connect() as connection:
             assert connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             ) == "0016"
@@ -667,8 +667,8 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
             """)).one()
 
             assert identity == (
-                "uptip_test_migration_0016",
-                "UPTIP disposable migration integration test database",
+                name,
+                "UPTIP disposable isolated migration test database",
             )
 
         authorization_factory = sessionmaker(
@@ -715,11 +715,11 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
         with pytest.raises(DBAPIError, match="Cannot downgrade"):
             command.downgrade(config, "0008")
 
-        with engine.connect() as connection:
+        with migration_engine.connect() as connection:
             revision = connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
-            assert revision in {"0012", "0014", "0016"}, (
+            assert revision in {"0012", "0014", "0016", "0017", "0018", "0019"}, (
                 f"Unexpected revision after rejected downgrade: {revision}"
             )
 
@@ -735,7 +735,7 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
             with migration_engine.begin() as connection:
                 assert connection.scalar(
                     text("SELECT current_database()")
-                ) == "uptip_test_migration_0016"
+                ) == name
                 connection.execute(
                     text("DELETE FROM assessment_start_authorizations")
                 )
@@ -743,59 +743,14 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
         command.upgrade(config, "head")
 
     finally:
-        try:
-            # Recover only the verified disposable migration database.
-            with engine.connect() as connection:
-                identity = connection.execute(text("""
-                    SELECT current_database(),
-                           shobj_description(oid, 'pg_database')
-                    FROM pg_database
-                    WHERE datname = current_database()
-                """)).one()
-
-                if identity != (
-                    "uptip_test_migration_0016",
-                    "UPTIP disposable migration integration test database",
-                ):
-                    raise RuntimeError(
-                        "Refusing migration recovery: database identity mismatch"
-                    )
-
-                revision = connection.scalar(
-                    text("SELECT version_num FROM alembic_version")
-                )
-
-            if revision != "0016":
-                if config is None:
-                    raise RuntimeError(
-                        "Cannot recover migration: Alembic configuration "
-                        "was not initialized"
-                    )
-
-                if (
-                    make_url(settings.database_url).database
-                    != "uptip_test_migration_0016"
-                    or make_url(settings.migration_database_url).database
-                    != "uptip_test_migration_0016"
-                ):
-                    raise RuntimeError(
-                        "Refusing migration recovery: unsafe configuration"
-                    )
-
-                command.upgrade(config, "head")
-
-        finally:
-            if original_db_override is None:
-                migration_client.app.dependency_overrides.pop(get_db, None)
-            else:
-                migration_client.app.dependency_overrides[get_db] = (
-                    original_db_override
-                )
-
-            settings.database_url = original_runtime_url
-            settings.migration_database_url = original_migration_url
-            engine.dispose()
-            migration_engine.dispose()
+        if original_db_override is None:
+            migration_client.app.dependency_overrides.pop(get_db, None)
+        else:
+            migration_client.app.dependency_overrides[get_db] = original_db_override
+        settings.database_url = original_runtime_url
+        settings.migration_database_url = original_migration_url
+        engine.dispose()
+        migration_engine.dispose()
 
 @pytest.mark.parametrize('case', [
     'eligible_only', 'completed', 'expired', 'stale', 'ordering_only', 'unknown',

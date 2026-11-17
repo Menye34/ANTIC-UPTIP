@@ -34,3 +34,6 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .coverage
+
+# Local execution worker evidence
+/backend/worker_evidence/
