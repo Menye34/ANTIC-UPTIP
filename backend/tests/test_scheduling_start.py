@@ -97,9 +97,9 @@ def test_stale_review_cannot_start(client,db,prepared,monkeypatch,change):
     path,headers,_=prepared
     review=get_review(client,path)['start_review']
     if change=='scope':
-        a=db.scalar(select(Assessment));a.scope_revision+=1;db.commit()
+        a=db.get(Assessment, UUID(path.rsplit('/', 1)[1]));a.scope_revision+=1;db.commit()
     elif change=='target':
-        t=db.scalar(select(AssessmentTarget));t.revision+=1;db.commit()
+        t=db.scalar(select(AssessmentTarget).where(AssessmentTarget.assessment_id == UUID(path.rsplit('/', 1)[1])));t.revision+=1;db.commit()
     elif change=='tool':
         record_tool_state(db,'Nmap','disabled',[]);db.commit()
     elif change=='parameters':
