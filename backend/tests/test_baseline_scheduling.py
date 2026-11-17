@@ -21,6 +21,19 @@ def count_for_assessment(db, model, path):
                      .where(model.assessment_id == assessment_id))
 
 
+def assert_disposable_cleanup_database(engine):
+    """Never permit destructive cleanup without an exact verified test identity."""
+    from sqlalchemy import text
+    with engine.connect() as connection:
+        identity = connection.execute(text(
+            "SELECT current_database(), shobj_description(oid, 'pg_database') "
+            "FROM pg_database WHERE datname = current_database()"
+        )).one()
+    assert identity == (
+        'uptip_test_readiness_fix', 'UPTIP disposable integration test database'
+    ), 'Refusing destructive cleanup outside the explicitly marked test database'
+
+
 @pytest.mark.parametrize('partial', [False, True])
 def test_start_queues_exactly_authorized_work(client, db, start_case, monkeypatch, partial):
     import socket
@@ -188,6 +201,7 @@ def test_concurrent_start_has_one_authorization_and_queue(engine, monkeypatch, s
             assert count_for_assessment(check, BaselineExecutionRequest, path) == 1
     finally:
         # This engine is the positively verified disposable test database.
+        assert_disposable_cleanup_database(engine)
         with engine.begin() as connection:
             connection.execute(text('TRUNCATE users, roles, baseline_tool_states, execution_policy_versions CASCADE'))
 
@@ -238,6 +252,7 @@ def test_overview_keeps_one_snapshot_during_start(engine, monkeypatch):
             assert after['counts']['queued'] == 1
             assert after['authorization_scope']['authorization_id']
     finally:
+        assert_disposable_cleanup_database(engine)
         with engine.begin() as connection:
             connection.execute(text('TRUNCATE users, roles, baseline_tool_states, execution_policy_versions CASCADE'))
 
