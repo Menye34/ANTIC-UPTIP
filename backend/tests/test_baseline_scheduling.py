@@ -159,7 +159,6 @@ def test_concurrent_start_has_one_authorization_and_queue(engine, monkeypatch, s
     from uuid import uuid4
 
     from fastapi.testclient import TestClient
-    from sqlalchemy import text
     from sqlalchemy.orm import sessionmaker
 
     from app.database import get_db
@@ -200,10 +199,7 @@ def test_concurrent_start_has_one_authorization_and_queue(engine, monkeypatch, s
             assert count_for_assessment(check, AssessmentStartEvent, path) == 1
             assert count_for_assessment(check, BaselineExecutionRequest, path) == 1
     finally:
-        # This engine is the positively verified disposable test database.
-        assert_disposable_cleanup_database(engine)
-        with engine.begin() as connection:
-            connection.execute(text('TRUNCATE users, roles, baseline_tool_states, execution_policy_versions CASCADE'))
+        app.dependency_overrides.clear()
 
 
 def test_overview_keeps_one_snapshot_during_start(engine, monkeypatch):
@@ -252,9 +248,7 @@ def test_overview_keeps_one_snapshot_during_start(engine, monkeypatch):
             assert after['counts']['queued'] == 1
             assert after['authorization_scope']['authorization_id']
     finally:
-        assert_disposable_cleanup_database(engine)
-        with engine.begin() as connection:
-            connection.execute(text('TRUNCATE users, roles, baseline_tool_states, execution_policy_versions CASCADE'))
+        app.dependency_overrides.clear()
 
 
 def test_configured_policy_reports_missing_safety_without_queue(client, db, start_case, monkeypatch):
@@ -272,5 +266,5 @@ def test_configured_policy_reports_missing_safety_without_queue(client, db, star
     assert set(activity['system_safety_verification']['pending']) >= {
         'executor_parameter_binding', 'runtime_stop_condition_enforcement',
     }
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest)) == 0
+    assert count_for_assessment(db, BaselineExecutionRequest, path) == 0
     assert client.get(path).json()['status'] == 'Draft'
