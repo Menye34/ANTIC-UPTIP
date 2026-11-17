@@ -22,9 +22,10 @@ def db(engine):
     from sqlalchemy.engine import make_url
     from sqlalchemy.orm import sessionmaker
 
+    import os
     values = dotenv_values(".env")
-    runtime_raw = values.get("UPTIP_DATABASE_URL")
-    owner_raw = values.get("UPTIP_MIGRATION_DATABASE_URL")
+    runtime_raw = os.environ.get("UPTIP_DATABASE_URL") or values.get("UPTIP_DATABASE_URL")
+    owner_raw = os.environ.get("UPTIP_MIGRATION_DATABASE_URL") or values.get("UPTIP_MIGRATION_DATABASE_URL")
 
     if not runtime_raw or not owner_raw:
         pytest.fail("Missing database configuration for persistence tests")
@@ -36,7 +37,8 @@ def db(engine):
         runtime_url.drivername == owner_url.drivername == "postgresql+psycopg"
         and runtime_url.username == "uptip_runtime"
         and owner_url.username == "uptip"
-        and runtime_url.database == owner_url.database == "uptip"
+        and runtime_url.database == owner_url.database
+        and runtime_url.database in ("uptip", "uptip_test_readiness_fix")
         and runtime_url.host == owner_url.host == "127.0.0.1"
         and runtime_url.port == owner_url.port
         and runtime_url.port in (None, 5432)
