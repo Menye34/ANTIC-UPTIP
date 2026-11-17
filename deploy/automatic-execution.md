@@ -25,8 +25,8 @@ spawn scanners, start the worker, or bypass `dispatch_verification.verify`.
    capability-free, and pinned to its verified SHA-256 and version.
 3. Review all queued requests and scope/authorization before enabling dispatch.
 4. Use a separate root-owned environment file (mode 0600) containing
-   `DATABASE_URL`, `UPTIP_NMAP_EXECUTABLE`, `UPTIP_NMAP_SHA256`,
-   `UPTIP_NMAP_VERSION`, `UPTIP_EVIDENCE_DIRECTORY`. Do not commit it.
+   `UPTIP_DATABASE_URL`, `UPTIP_RATE_KEY`, `UPTIP_NMAP_EXECUTABLE`, `UPTIP_NMAP_SHA256`,
+   `UPTIP_NMAP_VERSION`, `UPTIP_EVIDENCE_DIRECTORY`. The worker's\n`Settings` also reads the existing application environment settings; preserve\nthe required settings without copying application admin or migration secrets.\nDo not commit the environment file.
 5. Evidence directory must exist and be writable only by the worker (0700).
 
 ## systemd installation on Kali
