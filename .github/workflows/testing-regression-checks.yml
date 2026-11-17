@@ -57,6 +57,7 @@ jobs:
       UPTIP_MIGRATION_DATABASE_URL: postgresql+psycopg://uptip:owner-ci-only@127.0.0.1:5432/uptip_test_readiness_fix
       UPTIP_TEST_DATABASE_URL: postgresql+psycopg://uptip:owner-ci-only@127.0.0.1:5432/uptip_test_readiness_fix
       PGPASSWORD: postgres-ci-only
+      UPTIP_CI_POSTGRES_ADMIN_URL: postgresql+psycopg://postgres:postgres-ci-only@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -82,5 +83,4 @@ jobs:
       - name: Execute backend scheduling regression tests
         working-directory: backend
         run: |
-          python -m pytest tests/test_scheduling_start.py -q --tb=short \
-            -k 'not concurrency and not concurrent and not migration'
+          python -m pytest tests/test_scheduling_start.py -q --tb=short
