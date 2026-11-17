@@ -1,0 +1,34 @@
+name: Testing regression checks
+
+on:
+  push:
+    branches:
+      - fix/testing-backend-regressions
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'src/**'
+      - 'package*.json'
+      - '.github/workflows/testing-regression-checks.yml'
+
+jobs:
+  backend-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check backend Python syntax
+        run: python -m compileall -q backend/app backend/tests backend/migrations
+
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Run Testing UI regression tests
+        run: npx vitest run src/components/TestingPage.test.tsx src/TestingRoute.test.tsx
+      - name: Build frontend
+        run: npm run build
