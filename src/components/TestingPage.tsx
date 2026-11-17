@@ -42,30 +42,106 @@ function Details({ assessmentId, executionId, onClose, onExpired }: {
     })
     return () => controller.abort()
   }, [assessmentId, executionId, onExpired, retry])
+
+  const lastAttempt = data?.attempts.at(-1)
+  const isRunning = data?.status === 'Running'
+  const isFailed = data?.status === 'Failed'
+  const isCompleted = data?.status === 'Completed'
+  const stateTitle = isRunning ? 'Running Test Details' : isFailed ? 'Failed Test Details'
+    : isCompleted ? 'Completed Test Details' : 'Execution Details'
+  const totalObservations = data?.processing.reduce((sum, item) => sum + item.observation_count, 0) ?? 0
+
   return <dialog className="testing-details analyst-card" ref={dialog} aria-labelledby="execution-details-title" onCancel={onClose}>
-    <div className="testing-details-heading"><h2 id="execution-details-title">Execution Details</h2>
-      <button type="button" className="analyst-link" onClick={onClose}>Close</button></div>
+    <div className="testing-details-heading">
+      <h2 id="execution-details-title">{stateTitle}</h2>
+      <button type="button" className="analyst-link" onClick={onClose}>Close</button>
+    </div>
     {error ? <div role="alert"><p>{error}</p><button type="button" className="analyst-link" onClick={() => { setError(''); setRetry(n => n + 1) }}>Retry</button></div>
       : !data ? <p role="status">Loading execution details…</p> : <>
-        <dl className="testing-metadata">
-          <div><dt>Test</dt><dd>{data.test_name}</dd></div><div><dt>Tool</dt><dd>{data.tool}</dd></div>
-          <div><dt>Target</dt><dd>{data.target}</dd></div><div><dt>Status</dt><dd>{data.status}</dd></div>
-          <div><dt>Profile</dt><dd>{data.profile_id} v{data.profile_version}</dd></div>
-        </dl>
-        <h3>Execution attempts</h3>
-        {!data.attempts.length ? <p>No execution attempt recorded. Queued does not mean Running.</p> : data.attempts.map(attempt => <p key={attempt.id}>
-          Attempt {attempt.attempt_number}: {attempt.status} · Started: {timestamp(attempt.started_at)} · Finished: {timestamp(attempt.finished_at)}
-          {attempt.reason_code && ` · ${attempt.reason_code}`}{attempt.recovery_reason && ` · ${attempt.recovery_reason}`}
-        </p>)}
-        <h3>Result processing</h3>
-        {!data.processing.length ? <p>No processing outcome recorded.</p> : data.processing.map(item => <p key={item.id}>
-          {item.status} · {item.observation_count} observations{item.partial && ' · Partial'}{item.error_code && ` · ${item.error_code}`}</p>)}
-        <h3>Evidence summaries</h3>
-        {!data.evidence.length ? <p>No scanner evidence recorded.</p> : <ul>{data.evidence.map(item => <li key={item.id}>
-          {item.format} · {item.size_bytes} bytes{item.partial && ' · Partial'} · {timestamp(item.collected_at)}</li>)}</ul>}
-        <p className="testing-secondary">This read-only view does not authorize scanner execution. Original tool output is not exposed by this API.</p>
+        <div className="testing-detail-summary">
+          <div><h3>{data.test_name}</h3><p>{data.tool} · {data.target}</p></div>
+          <span className="testing-state" data-status={data.status}>{data.status}</span>
+        </div>
+        <p className="testing-detail-status" role="status">
+          {isCompleted ? 'The test completed. Review the persisted results and evidence below.'
+            : isRunning ? 'This test is in progress. Results may not be available until processing completes.'
+            : isFailed ? 'This test failed. Review the recorded reason and any partial evidence.'
+            : data.status === 'Queued' ? 'This test is queued and has not started.'
+            : `Execution status: ${data.status}. Review the recorded information below.`}
+        </p>
+        <section className="testing-detail-section" aria-label="Execution overview">
+          <h3>Execution Overview</h3>
+          <dl className="testing-detail-grid">
+            <div><dt>Test</dt><dd>{data.test_name}</dd></div>
+            <div><dt>Tool</dt><dd>{data.tool}</dd></div>
+            <div><dt>Target</dt><dd>{data.target}</dd></div>
+            <div><dt>Status</dt><dd>{data.status}</dd></div>
+            <div><dt>Started</dt><dd>{timestamp(lastAttempt?.started_at ?? null)}</dd></div>
+            <div><dt>Finished</dt><dd>{timestamp(lastAttempt?.finished_at ?? null)}</dd></div>
+          </dl>
+        </section>
+        {isFailed && <section className="testing-detail-section" aria-label="Failure information">
+          <h3>Failure Information</h3>
+          <dl className="testing-metadata">
+            <div><dt>Reason code</dt><dd>{lastAttempt?.reason_code ?? 'Not recorded'}</dd></div>
+            <div><dt>Exit code</dt><dd>{lastAttempt?.exit_code ?? 'Not recorded'}</dd></div>
+            <div><dt>Recovery status</dt><dd>{lastAttempt?.recovery_reason ?? 'Not recorded'}</dd></div>
+          </dl>
+        </section>}
+        <section className="testing-detail-section" aria-label="Test results">
+          <h3>{isRunning ? 'Progress & Results' : 'Test Results'}</h3>
+          <div className="testing-result-metrics">
+            <div><strong>{totalObservations}</strong><span>Processed observations</span></div>
+            <div><strong>{data.evidence.length}</strong><span>Evidence records</span></div>
+            <div><strong>{data.processing.length}</strong><span>Processing runs</span></div>
+          </div>
+          {data.observations.length ? <ul className="testing-detail-list">{data.observations.map(item =>
+            <li key={item.id}>{item.type}{item.partial ? ' · Partial result' : ''}</li>)}</ul>
+            : <p>No processed observations recorded.</p>}
+        </section>
+        <section className="testing-detail-section" aria-label="Evidence summaries">
+          <h3>Supporting Evidence</h3>
+          {data.evidence.length ? <ul className="testing-detail-list">{data.evidence.map(item =>
+            <li key={item.id}>{item.format} · {item.size_bytes} bytes{item.partial ? ' · Partial' : ''} · {timestamp(item.collected_at)}</li>)}</ul>
+            : <p>No scanner evidence recorded.</p>}
+        </section>
+        <details className="testing-detail-section" open>
+          <summary>Technical Details</summary>
+          <dl className="testing-metadata">
+            <div><dt>Execution ID</dt><dd>{data.id}</dd></div>
+            <div><dt>Tool</dt><dd>{data.tool}</dd></div>
+            <div><dt>Target</dt><dd>{data.target}</dd></div>
+            <div><dt>Profile</dt><dd>{data.profile_id} v{data.profile_version}</dd></div>
+            <div><dt>Dispatch status</dt><dd>{data.dispatch_status}</dd></div>
+          </dl>
+          <h3>Execution attempts</h3>
+          {!data.attempts.length ? <p>No execution attempt recorded. Queued does not mean Running.</p>
+            : data.attempts.map(attempt => <p key={attempt.id}>Attempt {attempt.attempt_number}: {attempt.status}
+              {' · Started: '}{timestamp(attempt.started_at)}{' · Finished: '}{timestamp(attempt.finished_at)}
+              {attempt.reason_code && ` · ${attempt.reason_code}`}
+              {attempt.recovery_reason && ` · ${attempt.recovery_reason}`}</p>)}
+          <h3>Result processing</h3>
+          {!data.processing.length ? <p>No processing outcome recorded.</p> : data.processing.map(item =>
+            <p key={item.id}>{item.status} · {item.observation_count} observations
+              {item.partial && ' · Partial'}{item.error_code && ` · ${item.error_code}`}</p>)}
+          <h3>Execution timeline</h3>
+          {data.events.length ? <ul className="testing-detail-list">{data.events.map(item =>
+            <li key={item.id}>{eventLabel(item.event)} · {timestamp(item.occurred_at)}</li>)}</ul>
+            : <p>No execution events recorded.</p>}
+        </details>
+        <p className="testing-secondary">Read-only execution information. This view does not authorize scanner execution or expose original tool output.</p>
       </>}
   </dialog>
+}
+
+const eventNames: Record<string, string> = {
+  execution_queued: 'Queued', execution_claimed: 'Execution claimed',
+  scanner_started: 'Scanner started', evidence_persisted: 'Evidence saved',
+  execution_finished: 'Execution finished', dispatch_blocked: 'Dispatch blocked',
+  recovery_required: 'Recovery required',
+}
+function eventLabel(event: string) {
+  return eventNames[event] ?? event.replace(/_/g, ' ')
 }
 
 export default function TestingPage({ assessmentId, onExpired }: { assessmentId: string; onExpired: () => void }) {
@@ -165,7 +241,7 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
             {data.recent_activity.length ? <ul className="testing-events">{data.recent_activity.map((item, index) => {
               const execution = data.executions.find(row => row.id === item.execution_id)
               return <li key={item.execution_id + ':' + index}><img src={marker} alt="" /><div>
-                <span>{item.event === 'execution_queued' ? `${execution?.test_name ?? 'Execution'} queued` : item.event}</span>
+                <span>{`${execution?.test_name ?? 'Execution'}: ${eventLabel(item.event)}`}</span>
                 <small><time dateTime={item.occurred_at}>{timestamp(item.occurred_at)}</time></small></div></li>
             })}</ul> : <p>No testing events recorded.</p>}
             <button type="button" className="analyst-link" disabled title="Audit Log is unavailable in this release">View Audit Log</button>
