@@ -1,0 +1,37 @@
+# Template: replace __USER__, __BACKEND_DIR__, __PYTHON__ and __WORKER_ENV__.
+# Install only after confirming dedicated worker DB role, scanner pin, and authorized queued jobs.
+[Unit]
+Description=UPTIP authorized security execution worker
+After=network-online.target postgresql.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__BACKEND_DIR__
+EnvironmentFile=__WORKER_ENV__
+Environment=PYTHONUNBUFFERED=1
+# Environment file supplies UPTIP_NMAP_EXECUTABLE, UPTIP_NMAP_SHA256,
+# UPTIP_NMAP_VERSION, UPTIP_EVIDENCE_DIRECTORY and DATABASE_URL.
+ExecStart=__PYTHON__ -m app.execution_worker --executable ${UPTIP_NMAP_EXECUTABLE} --sha256 ${UPTIP_NMAP_SHA256} --version ${UPTIP_NMAP_VERSION} --evidence-directory ${UPTIP_EVIDENCE_DIRECTORY} --enable-dispatch
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+KillMode=control-group
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__EVIDENCE_DIR__
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
