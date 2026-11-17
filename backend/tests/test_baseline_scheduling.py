@@ -192,8 +192,9 @@ def test_concurrent_start_has_one_authorization_and_queue(engine, monkeypatch, s
         with ThreadPoolExecutor(max_workers=2) as pool:
             first = pool.submit(send, key)
             second = pool.submit(send, key if same_key else str(uuid4()))
-            statuses = sorted([first.result(timeout=15).status_code, second.result(timeout=15).status_code])
-        assert statuses == ([200, 201] if same_key else [201, 409])
+            responses = [first.result(timeout=15), second.result(timeout=15)]
+            statuses = sorted(response.status_code for response in responses)
+        assert statuses == ([200, 201] if same_key else [201, 409]), [response.json() for response in responses]
         with factory() as check:
             assert count_for_assessment(check, AssessmentStartAuthorization, path) == 1
             assert count_for_assessment(check, AssessmentStartEvent, path) == 1
@@ -231,7 +232,7 @@ def test_overview_keeps_one_snapshot_during_start(engine, monkeypatch):
                     return
                 started = True
                 response = writer.post(path + '/start', headers=headers, json=body)
-                assert response.status_code == 201
+                assert response.status_code == 201, response.text
 
             event.listen(engine, 'after_cursor_execute', commit_after_overview_select)
             try:
