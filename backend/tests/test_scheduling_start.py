@@ -318,7 +318,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
         )
         config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
         config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
-        command.upgrade(config,'head' if ci_admin_url else '0017')
+        command.upgrade(config, '0017' if getattr(request, 'param', None) == 'migration_0017' else ('head' if ci_admin_url else '0017'))
         # Use the migration owner only for this disposable test database.
         # The production runtime role remains restricted.
         owner_engine = create_engine(migration_url)
