@@ -252,6 +252,7 @@ def test_constraints_indexes_and_existing_authorization_immutability(db,queued):
             with db.begin_nested():db.execute(text(statement))
 
 
+@pytest.mark.parametrize('scheduling_concurrency', ['migration_0017'], indirect=True)
 def test_0018_preserves_queued_requests_metadata_and_refuses_history_downgrade(scheduling_concurrency):
     from pathlib import Path
     from alembic import command
