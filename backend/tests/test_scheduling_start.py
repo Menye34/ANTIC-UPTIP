@@ -235,6 +235,8 @@ def scheduling_concurrency(engine,monkeypatch,request):
     import subprocess
 
     helper = Path('/usr/local/lib/uptip-test/scheduling_db_admin.py')
+    if not helper.is_file():
+        pytest.skip('Isolated concurrency tests require the restricted scheduling DB admin helper')
 
     def administer(action):
         subprocess.run(
