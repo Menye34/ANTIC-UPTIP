@@ -39,6 +39,14 @@ def confirm(client, path, headers, review, key=None):
         json={'confirmed':True,'review_token':review['review_token'],'mode':review['mode']})
 
 
+def assessment_record_count(db, model, path):
+    """Count only records belonging to the assessment under test."""
+    assessment_id = UUID(path.rsplit('/', 1)[1])
+    return db.scalar(
+        select(func.count()).select_from(model).where(model.assessment_id == assessment_id)
+    )
+
+
 def test_full_start_and_replay_with_no_deployment_records(client, db, prepared):
     path, headers, _ = prepared
     data = get_review(client,path)
@@ -61,8 +69,8 @@ def test_full_start_and_replay_with_no_deployment_records(client, db, prepared):
     assert receipt['execution_authorized'] is False
     retry=confirm(client,path,headers,review,key)
     assert retry.status_code==200 and retry.json()==receipt
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest))==1
-    assert db.scalar(select(func.count()).select_from(AssessmentStartEvent))==1
+    assert assessment_record_count(db, BaselineExecutionRequest, path)==1
+    assert db.scalar(select(func.count()).select_from(AssessmentStartEvent).join(AssessmentStartAuthorization, AssessmentStartEvent.authorization_id == AssessmentStartAuthorization.id).where(AssessmentStartAuthorization.assessment_id == UUID(path.rsplit('/', 1)[1])))==1
     overview=client.get(path+'/testing').json()
     assert overview['counts']['queued']==1 and overview['counts']['completed']==0
     assert len(client.get(path+'/testing/executions').json())==1
@@ -81,7 +89,7 @@ def test_partial_excludes_outside_and_unsupported_targets(client, db, prepared):
     assert review['mode']=='partial' and len(review['eligible_activities'])==1
     assert len(review['excluded_targets'])==2
     assert confirm(client,path,headers,review).status_code==201
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest))==1
+    assert assessment_record_count(db, BaselineExecutionRequest, path)==1
 
 
 @pytest.mark.parametrize('change',['scope','target','tool','parameters','prerequisite','policy'])
@@ -103,9 +111,9 @@ def test_stale_review_cannot_start(client,db,prepared,monkeypatch,change):
         monkeypatch.setattr(scheduling_policy,'POLICY_VERSION',3)
     result=confirm(client,path,headers,review)
     assert result.status_code==409
-    assert db.scalar(select(Assessment.status))=='Draft'
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest))==0
-    assert db.scalar(select(func.count()).select_from(AssessmentStartAuthorization))==0
+    assert db.scalar(select(Assessment.status).where(Assessment.id == UUID(path.rsplit('/', 1)[1])))=='Draft'
+    assert assessment_record_count(db, BaselineExecutionRequest, path)==0
+    assert assessment_record_count(db, AssessmentStartAuthorization, path)==0
 
 
 def test_creator_csrf_and_authentication_checks(client,db,prepared):
@@ -133,9 +141,9 @@ def test_audit_failure_rolls_back_queue_and_transition(client,db,engine,prepared
         assert confirm(client,path,headers,review).status_code == 503
     finally:
         event.remove(AssessmentStartEvent,'before_insert',fail)
-    assert db.scalar(select(Assessment.status))=='Draft'
-    assert db.scalar(select(func.count()).select_from(AssessmentStartAuthorization))==0
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest))==0
+    assert db.scalar(select(Assessment.status).where(Assessment.id == UUID(path.rsplit('/', 1)[1])))=='Draft'
+    assert assessment_record_count(db, AssessmentStartAuthorization, path)==0
+    assert assessment_record_count(db, BaselineExecutionRequest, path)==0
 
 
 def test_readiness_is_read_only_and_deterministic(client,db,engine,prepared):
@@ -183,7 +191,7 @@ def test_legacy_receipt_replays_but_legacy_review_cannot_create_new_start(client
     assert old_receipt.status_code==201
     replay=confirm(client,path,headers,old_review,key)
     assert replay.status_code==200 and replay.json()==old_receipt.json()
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest))==1
+    assert assessment_record_count(db, BaselineExecutionRequest, path)==1
 
 
 @pytest.mark.parametrize('state',['unknown','disabled','unavailable'])
