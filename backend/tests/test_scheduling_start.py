@@ -235,16 +235,50 @@ def scheduling_concurrency(engine,monkeypatch,request):
     import subprocess
 
     helper = Path('/usr/local/lib/uptip-test/scheduling_db_admin.py')
-    if not helper.is_file():
-        pytest.skip('Isolated concurrency tests require the restricted scheduling DB admin helper')
-
-    def administer(action):
-        subprocess.run(
-            ['sudo', '-n', '-u', 'postgres', '/usr/bin/python3',
-             str(helper), action, name],
-            check=True,
-            timeout=30,
-        )
+    ci_admin_url = os.environ.get('UPTIP_CI_POSTGRES_ADMIN_URL')
+    if ci_admin_url:
+        from sqlalchemy.engine import make_url
+        admin_url = make_url(ci_admin_url)
+        if not (
+            os.environ.get('GITHUB_ACTIONS') == 'true'
+            and admin_url.drivername == 'postgresql+psycopg'
+            and admin_url.username == 'postgres'
+            and admin_url.host == '127.0.0.1'
+            and admin_url.database == 'postgres'
+            and admin_url.port in (None, 5432)
+            and not admin_url.query
+            and engine.url.database == 'uptip_test_readiness_fix'
+        ):
+            pytest.fail('Refusing unverified CI database administration')
+        from sqlalchemy import create_engine
+        from sqlalchemy.pool import NullPool
+        admin_engine = create_engine(admin_url, isolation_level='AUTOCOMMIT', poolclass=NullPool)
+        def administer(action):
+            from sqlalchemy import text
+            if action not in ('create', 'drop'):
+                raise ValueError('Unsupported CI database operation')
+            with admin_engine.connect() as conn:
+                if action == 'create':
+                    conn.execute(text(f'CREATE DATABASE "{name}" OWNER uptip'))
+                    conn.execute(text(
+                        f"COMMENT ON DATABASE \"{name}\" IS 'UPTIP disposable scheduling concurrency database'"
+                    ))
+                else:
+                    identity = conn.execute(text(
+                        'SELECT shobj_description(oid, \'pg_database\') FROM pg_database WHERE datname=:name'
+                    ), {'name': name}).scalar_one_or_none()
+                    if identity != 'UPTIP disposable scheduling concurrency database':
+                        raise RuntimeError('Refusing to drop unverified scheduling database')
+                    conn.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
+    else:
+        if not helper.is_file():
+            pytest.skip('Isolated concurrency tests require the restricted scheduling DB admin helper')
+        def administer(action):
+            subprocess.run(
+                ['sudo', '-n', '-u', 'postgres', '/usr/bin/python3',
+                 str(helper), action, name],
+                check=True, timeout=30,
+            )
 
     administer('create')
     dedicated=create_engine(engine.url.set(database=name))
@@ -257,7 +291,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
         from dotenv import dotenv_values
         from sqlalchemy.engine import make_url
 
-        migration_raw = dotenv_values(".env").get("UPTIP_MIGRATION_DATABASE_URL")
+        migration_raw = (os.environ.get("UPTIP_MIGRATION_DATABASE_URL") if ci_admin_url else dotenv_values(".env").get("UPTIP_MIGRATION_DATABASE_URL"))
         if not migration_raw:
             raise RuntimeError("Missing test migration database configuration")
 
@@ -266,11 +300,11 @@ def scheduling_concurrency(engine,monkeypatch,request):
         if not (
             migration_url.drivername == "postgresql+psycopg"
             and migration_url.username == "uptip"
-            and migration_url.database == "uptip"
+            and migration_url.database == ("uptip_test_readiness_fix" if ci_admin_url else "uptip")
             and migration_url.host == "127.0.0.1"
             and migration_url.port in (None, 5432)
             and not migration_url.query
-            and dedicated.url.username == "uptip_runtime"
+            and dedicated.url.username == ("uptip" if ci_admin_url else "uptip_runtime")
         ):
             raise RuntimeError("Unsafe test migration database configuration")
 
@@ -283,7 +317,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
         )
         config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
         config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
-        command.upgrade(config,'0017')
+        command.upgrade(config,'head' if ci_admin_url else '0017')
         # Use the migration owner only for this disposable test database.
         # The production runtime role remains restricted.
         owner_engine = create_engine(migration_url)
@@ -307,6 +341,8 @@ def scheduling_concurrency(engine,monkeypatch,request):
             owner_engine.dispose()
         dedicated.dispose()
         administer('drop')
+        if ci_admin_url:
+            admin_engine.dispose()
 
 
 @pytest.mark.parametrize('edit,same_key',[('none',True),('none',False),('scope',True),('target',True)])
