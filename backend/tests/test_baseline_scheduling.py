@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import Assessment, AssessmentStartAuthorization, AssessmentStartEvent, BaselineExecutionRequest
 from test_assessment_start import start_case, confirmation, review  # noqa: F401
-from test_scheduling_start import prepared as scheduling_prepared, get_review as scheduling_get_review
+from test_scheduling_start import scheduling_concurrency
 
 
 def count_for_assessment(db, model, path):
@@ -154,111 +154,76 @@ def test_database_prevents_duplicate_scheduling(client, db, start_case):
 
 
 @pytest.mark.parametrize('same_key', [False, True])
-def test_concurrent_start_has_one_authorization_and_queue(engine, monkeypatch, same_key):
+def test_concurrent_start_has_one_authorization_and_queue(scheduling_concurrency, same_key):
+    """Concurrent starts use the isolated, migrated scheduling test database."""
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
     from uuid import uuid4
 
     from fastapi.testclient import TestClient
-    from sqlalchemy.orm import sessionmaker
 
-    from app.database import get_db
-    from app.main import create_app
+    app, factory, (path, headers, _), review_data, cookies = scheduling_concurrency
+    assert review_data['schema_version'] == 3
+    assert review_data['confirmation_possible']
+    body = confirmation(review_data)
+    barrier = Barrier(2)
 
-    factory = sessionmaker(engine, expire_on_commit=False)
+    def send(key):
+        with TestClient(app, base_url='https://testserver', cookies=cookies) as parallel_client:
+            barrier.wait(timeout=10)
+            return parallel_client.post(path + '/start', json=body, headers={
+                **headers, 'Idempotency-Key': key, 'Origin': 'https://testserver',
+            })
 
-    def independent_db():
-        with factory() as session:
-            yield session
-
-    from app import assessment_routes, assessment_readiness
-    monkeypatch.setattr(assessment_routes, 'evaluate_readiness', assessment_readiness.evaluate_readiness)
-    app = create_app()
-    app.dependency_overrides[get_db] = independent_db
-    try:
-        with factory() as setup_db, TestClient(app, base_url='https://testserver') as setup_client:
-            setup_client.headers['Origin'] = 'https://testserver'
-            path, headers, _ = scheduling_prepared.__wrapped__(setup_client, setup_db, monkeypatch)
-            setup_db.commit()
-            review_data = scheduling_get_review(setup_client, path)['start_review']
-            assert review_data['confirmation_possible'] and review_data['mode'] in ('full', 'partial'), review_data
-            body = confirmation(review_data)
-            cookies = dict(setup_client.cookies)
-        barrier = Barrier(2)
-
-        def send(key):
-            with TestClient(app, base_url='https://testserver', cookies=cookies) as parallel_client:
-                barrier.wait(timeout=10)
-                return parallel_client.post(path + '/start', json=body, headers={
-                    **headers, 'Idempotency-Key': key, 'Origin': 'https://testserver',
-                })
-
-        key = headers['Idempotency-Key']
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            first = pool.submit(send, key)
-            second = pool.submit(send, key if same_key else str(uuid4()))
-            responses = [first.result(timeout=15), second.result(timeout=15)]
-            statuses = sorted(response.status_code for response in responses)
-        assert statuses == ([200, 201] if same_key else [201, 409]), [response.json() for response in responses]
-        with factory() as check:
-            assert count_for_assessment(check, AssessmentStartAuthorization, path) == 1
-            assert count_for_assessment(check, AssessmentStartEvent, path) == 1
-            assert count_for_assessment(check, BaselineExecutionRequest, path) == 1
-    finally:
-        app.dependency_overrides.clear()
+    key = headers['Idempotency-Key']
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(send, key)
+        second = pool.submit(send, key if same_key else str(uuid4()))
+        responses = [first.result(timeout=20), second.result(timeout=20)]
+    statuses = sorted(response.status_code for response in responses)
+    assert statuses == ([200, 201] if same_key else [201, 409]), [response.json() for response in responses]
+    with factory() as check:
+        assert count_for_assessment(check, AssessmentStartAuthorization, path) == 1
+        assert count_for_assessment(check, AssessmentStartEvent, path) == 1
+        assert count_for_assessment(check, BaselineExecutionRequest, path) == 1
 
 
-def test_overview_keeps_one_snapshot_during_start(engine, monkeypatch):
+def test_overview_keeps_one_snapshot_during_start(scheduling_concurrency):
+    """A concurrent Start cannot mix Draft overview data with Testing queue counts."""
     from fastapi.testclient import TestClient
-    from sqlalchemy import text
-    from sqlalchemy.orm import sessionmaker
-    from app.database import get_db
-    from app.main import create_app
 
-    factory = sessionmaker(engine, expire_on_commit=False)
+    app, factory, (path, headers, _), review_data, cookies = scheduling_concurrency
+    engine = factory.kw['bind']
+    assert review_data['schema_version'] == 3
+    assert review_data['confirmation_possible']
+    body = confirmation(review_data)
+    started = False
 
-    def independent_db():
-        with factory() as session:
-            yield session
+    with TestClient(app, base_url='https://testserver', cookies=cookies) as writer:
+        writer.headers['Origin'] = 'https://testserver'
 
-    from app import assessment_routes, assessment_readiness
-    monkeypatch.setattr(assessment_routes, 'evaluate_readiness', assessment_readiness.evaluate_readiness)
-    app = create_app()
-    app.dependency_overrides[get_db] = independent_db
-    try:
-        with factory() as setup_db, TestClient(app, base_url='https://testserver') as writer:
-            writer.headers['Origin'] = 'https://testserver'
-            path, headers, _ = scheduling_prepared.__wrapped__(writer, setup_db, monkeypatch)
-            setup_db.commit()
-            review_data = scheduling_get_review(writer, path)['start_review']
-            assert review_data['confirmation_possible'] and review_data['mode'] in ('full', 'partial'), review_data
-            body = confirmation(review_data)
-            started = False
+        def commit_after_overview_select(conn, cursor, statement, *args):
+            nonlocal started
+            if started or 'LEFT OUTER JOIN baseline_execution_requests' not in statement:
+                return
+            started = True
+            response = writer.post(path + '/start', headers=headers, json=body)
+            assert response.status_code == 201, response.text
 
-            def commit_after_overview_select(conn, cursor, statement, *args):
-                nonlocal started
-                if started or 'LEFT OUTER JOIN baseline_execution_requests' not in statement:
-                    return
-                started = True
-                response = writer.post(path + '/start', headers=headers, json=body)
-                assert response.status_code == 201, response.text
-
-            event.listen(engine, 'after_cursor_execute', commit_after_overview_select)
-            try:
-                with TestClient(app, base_url='https://testserver', cookies=dict(writer.cookies)) as reader:
-                    before = reader.get(path + '/testing').json()
-            finally:
-                event.remove(engine, 'after_cursor_execute', commit_after_overview_select)
-            assert started
-            assert before['lifecycle_status'] == 'Draft'
-            assert before['counts']['total'] == 0
-            assert before['authorization_scope']['authorization_id'] is None
-            after = writer.get(path + '/testing').json()
-            assert after['lifecycle_status'] == 'Testing'
-            assert after['counts']['queued'] == 1
-            assert after['authorization_scope']['authorization_id']
-    finally:
-        app.dependency_overrides.clear()
+        event.listen(engine, 'after_cursor_execute', commit_after_overview_select)
+        try:
+            with TestClient(app, base_url='https://testserver', cookies=cookies) as reader:
+                before = reader.get(path + '/testing').json()
+        finally:
+            event.remove(engine, 'after_cursor_execute', commit_after_overview_select)
+        assert started
+        assert before['lifecycle_status'] == 'Draft'
+        assert before['counts']['total'] == 0
+        assert before['authorization_scope']['authorization_id'] is None
+        after = writer.get(path + '/testing').json()
+        assert after['lifecycle_status'] == 'Testing'
+        assert after['counts']['queued'] == 1
+        assert after['authorization_scope']['authorization_id']
 
 
 def test_configured_policy_reports_missing_safety_without_queue(client, db, start_case, monkeypatch):
