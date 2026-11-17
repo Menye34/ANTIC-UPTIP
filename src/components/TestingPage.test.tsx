@@ -121,3 +121,33 @@ it('refreshes execution statuses without overlapping requests and cancels on unm
   await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
   expect(fetcher).toHaveBeenCalledTimes(2)
 })
+
+it.each(['Running', 'Completed', 'Failed'] as ExecutionStatus[])(
+  'shows state-specific %s execution details without writing to the API', async status => {
+    const details = { ...executionDetails(), status,
+      attempts: [{ id: 'attempt-1', attempt_number: 1, status: status === 'Completed' ? 'Succeeded' : status,
+        reason_code: status === 'Failed' ? 'scanner_error' : null, started_at: '2026-11-16T10:01:00Z',
+        finished_at: status === 'Running' ? null : '2026-11-16T10:02:00Z',
+        exit_code: status === 'Failed' ? 1 : status === 'Completed' ? 0 : null, recovery_reason: null }] }
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => reply(
+      String(input).endsWith('/synthetic-execution-0') ? details : testingData([status])))
+    vi.stubGlobal('fetch', fetcher)
+    page()
+    fireEvent.click(await screen.findByRole('button', { name: /View Details:/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByRole('heading', { name: status === 'Running'
+      ? 'Running Test Details' : status === 'Completed' ? 'Completed Test Details' : 'Failed Test Details' })).toBeVisible()
+    expect(within(dialog).getByText('Technical Details')).toBeVisible()
+    expect(within(dialog).getByRole('region', { name: 'Test results' })).toBeVisible()
+    if (status === 'Failed') expect(within(dialog).getByText('scanner_error')).toBeVisible()
+    expect(fetcher.mock.calls.every(([, options]) => !(options as RequestInit | undefined)?.method)).toBe(true)
+  })
+
+it('shows actual execution events with friendly labels and timestamps', async () => {
+  const overview = testingData(['Completed'])
+  overview.recent_activity = [{ event: 'execution_finished', execution_id: 'synthetic-execution-0',
+    occurred_at: '2026-11-16T10:02:00Z' }]
+  vi.stubGlobal('fetch', vi.fn(async () => reply(overview)))
+  page()
+  expect(await screen.findByText('Network Discovery: Execution finished')).toBeVisible()
+})
