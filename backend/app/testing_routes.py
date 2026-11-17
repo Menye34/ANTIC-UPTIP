@@ -40,8 +40,24 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
         'target_id', SecurityObservation.target_id, 'type', SecurityObservation.observation_type,
         'data', SecurityObservation.data, 'partial', SecurityObservation.is_partial)))\
         .where(SecurityObservation.assessment_id == Assessment.id).correlate(Assessment).scalar_subquery()
+    # Keep the event timeline in the same PostgreSQL statement/snapshot as the
+    # assessment, authorization, requests, and observations. Never expose event
+    # details, process identities, or worker internals in this overview.
+    recent_events = (select(
+        ExecutionEvent.request_id.label('execution_id'),
+        ExecutionEvent.event_type.label('event'),
+        ExecutionEvent.occurred_at.label('occurred_at'),
+        ExecutionEvent.id.label('event_id'),
+    ).where(ExecutionEvent.assessment_id == Assessment.id)
+     .order_by(ExecutionEvent.occurred_at.desc(), ExecutionEvent.id.desc())
+     .limit(20).correlate(Assessment).lateral('recent_execution_events'))
+    activity = (select(func.json_agg(func.json_build_object(
+        'event', recent_events.c.event,
+        'execution_id', recent_events.c.execution_id,
+        'occurred_at', recent_events.c.occurred_at,
+    ))).select_from(recent_events).scalar_subquery())
     rows = db.execute(
-        select(Assessment, AssessmentStartAuthorization, BaselineExecutionRequest, discoveries)
+        select(Assessment, AssessmentStartAuthorization, BaselineExecutionRequest, discoveries, activity)
         .outerjoin(AssessmentStartAuthorization,
                    AssessmentStartAuthorization.assessment_id == Assessment.id)
         .outerjoin(BaselineExecutionRequest, BaselineExecutionRequest.assessment_id == Assessment.id)
@@ -51,7 +67,7 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
     ).all()
     if not rows:
         raise HTTPException(404)
-    assessment, authorization, _, observations = rows[0]
+    assessment, authorization, _, observations, event_activity = rows[0]
     requests = [row[2] for row in rows if row[2] is not None]
     counts = {state: sum(item.status == state for item in requests) for state in
               ('Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled')}
@@ -71,10 +87,15 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
             'excluded_targets': snapshot.get('excluded_targets', []),
         },
         'discovered_so_far': observations or [],
-        'recent_activity': [
-            {'event': 'execution_queued', 'execution_id': item.id, 'occurred_at': item.created_at}
-            for item in reversed(requests[-20:])
-        ],
+        'recent_activity': sorted(
+            (event_activity or []) + [
+                {'event': 'execution_queued', 'execution_id': item.id,
+                 'occurred_at': item.created_at.isoformat()}
+                for item in requests if item.status == 'Queued'
+            ],
+            key=lambda entry: (str(entry['occurred_at']), str(entry['execution_id'])),
+            reverse=True,
+        )[:20],
     }
 
 
