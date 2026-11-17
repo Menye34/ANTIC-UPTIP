@@ -129,7 +129,7 @@ it.each(['Running', 'Completed', 'Failed'] as ExecutionStatus[])(
         reason_code: status === 'Failed' ? 'scanner_error' : null, started_at: '2026-11-16T10:01:00Z',
         finished_at: status === 'Running' ? null : '2026-11-16T10:02:00Z',
         exit_code: status === 'Failed' ? 1 : status === 'Completed' ? 0 : null, recovery_reason: null }] }
-    const fetcher = vi.fn(async (input: RequestInfo | URL) => reply(
+    const fetcher = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => reply(
       String(input).endsWith('/synthetic-execution-0') ? details : testingData([status])))
     vi.stubGlobal('fetch', fetcher)
     page()
