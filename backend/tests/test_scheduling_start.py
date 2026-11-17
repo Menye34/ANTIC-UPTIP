@@ -1,4 +1,5 @@
 """Actual version-3 scheduling workflow, without execution approvals or evidence."""
+import os
 from uuid import UUID, uuid4
 import pytest
 from pydantic import SecretStr
