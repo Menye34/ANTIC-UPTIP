@@ -177,7 +177,9 @@ def test_concurrent_start_has_one_authorization_and_queue(engine, monkeypatch, s
             setup_client.headers['Origin'] = 'https://testserver'
             path, headers, _, _, _ = start_case.__wrapped__(setup_client, setup_db, monkeypatch)
             setup_db.commit()
-            body = confirmation(review(setup_client, path))
+            review_data = review(setup_client, path)
+            assert review_data['confirmation_possible'] and review_data['mode'] in ('full', 'partial'), review_data
+            body = confirmation(review_data)
             cookies = dict(setup_client.cookies)
         barrier = Barrier(2)
 
@@ -223,7 +225,9 @@ def test_overview_keeps_one_snapshot_during_start(engine, monkeypatch):
             writer.headers['Origin'] = 'https://testserver'
             path, headers, _, _, _ = start_case.__wrapped__(writer, setup_db, monkeypatch)
             setup_db.commit()
-            body = confirmation(review(writer, path))
+            review_data = review(writer, path)
+            assert review_data['confirmation_possible'] and review_data['mode'] in ('full', 'partial'), review_data
+            body = confirmation(review_data)
             started = False
 
             def commit_after_overview_select(conn, cursor, statement, *args):
