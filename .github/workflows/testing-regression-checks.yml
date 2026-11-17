@@ -83,4 +83,9 @@ jobs:
       - name: Execute backend scheduling regression tests
         working-directory: backend
         run: |
-          python -m pytest tests/test_scheduling_start.py -q --tb=short
+          python -m pytest \
+            tests/test_scheduling_start.py \
+            tests/test_baseline_scheduling.py \
+            tests/test_execution_orchestration.py \
+            tests/test_execution_persistence.py \
+            -q --tb=short
