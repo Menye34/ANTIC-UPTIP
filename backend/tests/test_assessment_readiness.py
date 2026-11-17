@@ -9,6 +9,7 @@ from app import baseline_catalog
 from app.baseline_maintenance import record_tool_state
 from app.models import AssessmentTarget
 from test_assessments import API, add_analyst, sign_in
+from test_execution_persistence import db  # noqa: F401  # Isolated owner-role test fixture
 
 
 @pytest.fixture
@@ -40,9 +41,15 @@ def test_empty_and_unauthorized_readiness(client, db, draft):
 
 def test_resolved_baselines_do_not_bypass_missing_policy(client, db, engine, draft, monkeypatch):
     path, headers = draft
-    network, web = baseline_catalog.PROFILES
+    profiles = baseline_catalog.PROFILES
+    network = next(
+        p for p in profiles
+        if p.key == 'network-discovery' and p.version == 2
+    )
     second = replace(network, key='test-second-network-profile')
-    monkeypatch.setattr(baseline_catalog, 'PROFILES', (network, web, second))
+    monkeypatch.setattr(
+        baseline_catalog, 'PROFILES', (*profiles, second)
+    )
     record_tool_state(db, 'Nmap', 'enabled', ['ipv4-discovery'])
     db.commit()
     assert client.post(path + '/scope', headers=headers,
@@ -294,10 +301,17 @@ def test_signed_system_policy_still_requires_independent_start_evidence(client, 
     data = response.json()
     assert data['policy']['status'] == 'approved'
     assert data['policy_approval']['reference'] == authorization.reference
-    activity = data['targets'][0]['baseline_activities'][0]
+    activities = data['targets'][0]['baseline_activities']
+    activity = next(
+        a for a in activities
+        if a['profile_id'] == 'network-discovery'
+        and a['version'] == 2
+    )
     assert activity['status'] == 'resolved'
     assert activity['safety_evidence'] is None
-    assert activity['policy']['reason_code'] == 'activity_parameters_unverified'
+    # Approval for the legacy v1 profile cannot authorize the current v2 profile.
+    assert activity['policy']['reason_code'] == 'policy_rule_missing'
+    assert activity['policy']['disposition'] == 'blocked'
     assert data['start_review']['confirmation_possible'] is False
     assert data['start_review']['review_token'] is None
     assert data['execution_authorized'] is False

@@ -220,11 +220,19 @@ def scheduling_concurrency(engine,monkeypatch,request):
     from app.database import get_db
     from app.main import create_app
     name='uptip_test_schedule_'+uuid4().hex
-    admin=create_engine(engine.url.set(database='postgres'),isolation_level='AUTOCOMMIT')
-    with admin.connect() as c:
-        # The source engine has already passed the explicit disposable identity guard.
-        c.execute(text(f'CREATE DATABASE "{name}" TEMPLATE template0'))
-        c.execute(text(f"COMMENT ON DATABASE \"{name}\" IS 'UPTIP disposable scheduling concurrency database'"))
+    import subprocess
+
+    helper = Path('/usr/local/lib/uptip-test/scheduling_db_admin.py')
+
+    def administer(action):
+        subprocess.run(
+            ['sudo', '-n', '-u', 'postgres', '/usr/bin/python3',
+             str(helper), action, name],
+            check=True,
+            timeout=30,
+        )
+
+    administer('create')
     dedicated=create_engine(engine.url.set(database=name))
     settings=get_settings()
     try:
@@ -232,11 +240,40 @@ def scheduling_concurrency(engine,monkeypatch,request):
             identity=c.execute(text("SELECT current_database(), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()")).one_or_none()
             if identity != (name,'UPTIP disposable scheduling concurrency database'):
                 raise RuntimeError('Disposable scheduling database identity could not be verified')
-        monkeypatch.setattr(settings,'migration_database_url',dedicated.url.render_as_string(hide_password=False))
+        from dotenv import dotenv_values
+        from sqlalchemy.engine import make_url
+
+        migration_raw = dotenv_values(".env").get("UPTIP_MIGRATION_DATABASE_URL")
+        if not migration_raw:
+            raise RuntimeError("Missing test migration database configuration")
+
+        migration_url = make_url(migration_raw)
+
+        if not (
+            migration_url.drivername == "postgresql+psycopg"
+            and migration_url.username == "uptip"
+            and migration_url.database == "uptip"
+            and migration_url.host == "127.0.0.1"
+            and migration_url.port in (None, 5432)
+            and not migration_url.query
+            and dedicated.url.username == "uptip_runtime"
+        ):
+            raise RuntimeError("Unsafe test migration database configuration")
+
+        migration_url = migration_url.set(database=name)
+
+        monkeypatch.setattr(
+            settings,
+            'migration_database_url',
+            migration_url.render_as_string(hide_password=False),
+        )
         config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
         config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
         command.upgrade(config,'0017')
-        factory=sessionmaker(dedicated,expire_on_commit=False)
+        # Use the migration owner only for this disposable test database.
+        # The production runtime role remains restricted.
+        owner_engine = create_engine(migration_url)
+        factory=sessionmaker(owner_engine,expire_on_commit=False)
         app=create_app()
         def independent_db():
             with factory() as session:
@@ -252,10 +289,10 @@ def scheduling_concurrency(engine,monkeypatch,request):
                 db.rollback()
                 yield app,factory,result,reviewed,dict(c.cookies)
     finally:
+        if 'owner_engine' in locals():
+            owner_engine.dispose()
         dedicated.dispose()
-        with admin.connect() as c:
-            c.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
-        admin.dispose()
+        administer('drop')
 
 
 @pytest.mark.parametrize('edit,same_key',[('none',True),('none',False),('scope',True),('target',True)])

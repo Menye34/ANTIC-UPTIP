@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.execution_policy import PolicyDefinition, PolicyRule, select_policy
 from app.models import Assessment, AssessmentAssignment, AssessmentStartAuthorization, AssessmentStartEvent
 from test_assessments import API, add_analyst, sign_in
+from test_execution_persistence import db  # noqa: F401  # Isolated owner-role test fixture
 
 
 def prepare_start_case(client, db, monkeypatch, authorization_db=None):
@@ -27,16 +28,16 @@ def prepare_start_case(client, db, monkeypatch, authorization_db=None):
     assert client.post(path + '/scope', headers=headers,
                        json={'revision': 0, 'value': '192.0.2.0/24'}).status_code == 201
     assert client.post(path + '/targets', headers=headers, json={'value': '192.0.2.1'}).status_code == 201
-    definition = PolicyDefinition(policy_id='test-start', version=1, rules=(PolicyRule(
-        rule_id='test-rule', activity=profile.activity, tool=profile.tool, capability=profile.capability,
+    definition = PolicyDefinition(policy_id=f'test-start-{uuid4().hex}', version=1, rules=(PolicyRule(
+        rule_id=f'test-rule-{uuid4().hex}', activity=profile.activity, tool=profile.tool, capability=profile.capability,
         target_kind='IP address', profile_id=profile.key, profile_version=profile.version,
         disposition='preauthorized', parameter_digest='a' * 64, risk='low',
         prerequisites=('test-prerequisite',), max_units=1, stop_conditions=('test-stop',),
     ),))
     approval = {'policy_id': definition.policy_id, 'version': definition.version, 'digest': definition.digest,
-                'reference': 'synthetic-start-approval', 'provenance': 'Test only'}
+                'reference': f'synthetic-start-approval-{uuid4().hex}', 'provenance': 'Test only'}
     evidence = assessment_readiness.StartEvidence(
-        reference='test-evidence', expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        reference=f'test-evidence-{uuid4().hex}', expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         parameter_digest='a' * 64, risk='low', verified_prerequisites=frozenset({'test-prerequisite'}),
         requested_units=1, clear_stop_conditions=frozenset({'test-stop'}), mandatory_activities=frozenset(),
     )
@@ -149,10 +150,10 @@ def confirmation(review_data):
 
 
 def test_full_start_and_replay(client, db, start_case, monkeypatch):
-    path, headers, _, _, _ = start_case
+    path, headers, _, _, approval = start_case
     reviewed = review(client, path)
     assert reviewed['confirmation_possible'] and reviewed['mode'] == 'full'
-    assert reviewed['policy']['approval_reference'] == 'synthetic-start-approval'
+    assert reviewed['policy']['approval_reference'] == approval['reference']
     body = confirmation(reviewed)
     import socket
     import subprocess
@@ -179,7 +180,11 @@ def test_full_start_and_replay(client, db, start_case, monkeypatch):
     assert replay.status_code == 200 and replay.json() == receipt
     assert client.post(path + '/start', headers=headers, json={**body, 'mode': 'partial'}).json() == {
         'detail': {'code': 'start_idempotency_conflict'}}
-    assert db.scalar(select(func.count()).select_from(AssessmentStartEvent)) == 1
+    assert db.scalar(
+        select(func.count())
+        .select_from(AssessmentStartEvent)
+        .where(AssessmentStartEvent.authorization_id == record.id)
+    ) == 1
 
 
 @pytest.mark.parametrize('dependent', [False, True])
@@ -212,6 +217,7 @@ def test_partial_start_and_blocked_dependency(client, start_case, monkeypatch, d
 ])
 def test_invalidated_review(client, db, start_case, monkeypatch, change, code):
     path, headers, user, evidence, approval = start_case
+    original_assessment_id = UUID(path.rsplit('/', 1)[1])
     if change == 'expired':
         monkeypatch.setattr(assessment_start, 'TOKEN_LIFETIME', timedelta(milliseconds=1))
     body = confirmation(review(client, path))
@@ -223,12 +229,25 @@ def test_invalidated_review(client, db, start_case, monkeypatch, change, code):
         assert client.patch(f'{path}/targets/{target_id}', headers=headers,
                             json={'revision': 1, 'value': '192.0.2.2'}).status_code == 200
     elif change == 'baseline':
-        from app.models import BaselineAssignment
-        db.delete(db.scalar(select(BaselineAssignment)))
+        from app.models import BaselineAssignment, BaselineEvaluation
+        assignment = db.scalar(
+            select(BaselineAssignment)
+            .join(BaselineEvaluation)
+            .where(BaselineEvaluation.assessment_id == original_assessment_id)
+        )
+        assert assignment is not None, 'Current assessment has no baseline assignment'
+        db.delete(assignment)
         db.commit()
     elif change == 'profile':
         from app import baseline_catalog
-        monkeypatch.setattr(baseline_catalog, 'PROFILES', (replace(PROFILES[0], version=2), *PROFILES[1:]))
+        next_version = max(
+            profile.version for profile in PROFILES
+            if profile.key == PROFILES[0].key
+        ) + 1
+        monkeypatch.setattr(
+            baseline_catalog, 'PROFILES',
+            (replace(PROFILES[0], version=next_version), *PROFILES[1:]),
+        )
     elif change == 'assessment':
         response = client.post(API, headers={**headers, 'Idempotency-Key': str(uuid4())},
                                json={'name': 'Different assessment'})
@@ -256,7 +275,12 @@ def test_invalidated_review(client, db, start_case, monkeypatch, change, code):
     response = client.post(path + '/start', headers=headers, json=body)
     assert response.status_code == 409, response.text
     assert response.json()['detail']['code'] == code
-    assert db.scalar(select(func.count()).select_from(AssessmentStartAuthorization)) == 0
+    assessment_ids = {original_assessment_id, UUID(path.rsplit('/', 1)[1])}
+    assert db.scalar(
+        select(func.count())
+        .select_from(AssessmentStartAuthorization)
+        .where(AssessmentStartAuthorization.assessment_id.in_(assessment_ids))
+    ) == 0
     assert client.get(path).json()['status'] == 'Draft'
 
 
@@ -282,16 +306,33 @@ def test_audit_failure_rolls_back_authorization_and_lifecycle(client, db, engine
     body = confirmation(review(client, path))
 
     def fail_audit(conn, cursor, statement, *args):
-        if statement.startswith('INSERT INTO assessment_start_events'):
+        if statement.lstrip().upper().startswith('INSERT INTO ASSESSMENT_START_EVENTS'):
             raise SQLAlchemyError('Synthetic audit write failure')
 
-    event.listen(engine, 'before_cursor_execute', fail_audit)
+    audit_engine = db.get_bind().engine
+    event.listen(audit_engine, 'before_cursor_execute', fail_audit)
     try:
         assert client.post(path + '/start', headers=headers, json=body).status_code == 503
     finally:
-        event.remove(engine, 'before_cursor_execute', fail_audit)
-    assert db.scalar(select(func.count()).select_from(AssessmentStartAuthorization)) == 0
-    assert db.scalar(select(func.count()).select_from(AssessmentStartEvent)) == 0
+        event.remove(audit_engine, 'before_cursor_execute', fail_audit)
+    assessment_id = UUID(path.rsplit('/', 1)[1])
+
+    assert db.scalar(
+        select(func.count())
+        .select_from(AssessmentStartAuthorization)
+        .where(AssessmentStartAuthorization.assessment_id == assessment_id)
+    ) == 0
+
+    assert db.scalar(
+        select(func.count())
+        .select_from(AssessmentStartEvent)
+        .join(
+            AssessmentStartAuthorization,
+            AssessmentStartEvent.authorization_id == AssessmentStartAuthorization.id,
+        )
+        .where(AssessmentStartAuthorization.assessment_id == assessment_id)
+    ) == 0
+
     assert client.get(path).json()['status'] == 'Draft'
 
 
@@ -308,7 +349,21 @@ def test_concurrent_start_and_scope_edit(
     from app.main import create_app
 
     path, headers, _, _, _ = committed_start_case
-    body = confirmation(review(committed_client, path))
+    reviewed = review(committed_client, path)
+
+    print(
+        "PRE_START_REVIEW_DIAGNOSTIC:",
+        {
+            "confirmation_possible": reviewed.get("confirmation_possible"),
+            "mode": reviewed.get("mode"),
+            "review_token_present": isinstance(reviewed.get("review_token"), str),
+            "eligible_activity_count": len(reviewed.get("eligible_activities") or []),
+            "excluded_activity_count": len(reviewed.get("excluded_activities") or []),
+            "excluded_activities": reviewed.get("excluded_activities"),
+        },
+    )
+
+    body = confirmation(reviewed)
     cookies = dict(committed_client.cookies)
     committed_db.rollback()  # Release the review transaction.
     factory = sessionmaker(committed_db.get_bind())
@@ -319,27 +374,107 @@ def test_concurrent_start_and_scope_edit(
 
     app = create_app()
     app.dependency_overrides[get_db] = independent_db
+
+    from fastapi.exceptions import RequestValidationError
+    from app.routes import reply
+
+    @app.exception_handler(RequestValidationError)
+    async def diagnostic_validation_error(request, exc):
+        print(
+            "START_VALIDATION_ERROR:",
+            {
+                "path": request.url.path,
+                "errors": [
+                    {
+                        "location": error.get("loc"),
+                        "type": error.get("type"),
+                        "message": error.get("msg"),
+                    }
+                    for error in exc.errors()
+                ],
+            },
+        )
+        return reply(
+            422,
+            "invalid_request",
+            "Invalid authentication request.",
+        )
+
     barrier = Barrier(3)
+    start_key = uuid4()
 
     def send(endpoint, payload):
         with TestClient(app, base_url='https://testserver', cookies=cookies) as concurrent_client:
             barrier.wait(timeout=10)
-            return concurrent_client.post(path + endpoint, json=payload,
-                                          headers={**headers, 'Origin': 'https://testserver'})
+            request_headers = {
+                **headers,
+                'Origin': 'https://testserver',
+            }
+            if endpoint == '/start':
+                request_headers['Idempotency-Key'] = str(start_key)
+
+            return concurrent_client.post(
+                path + endpoint,
+                json=payload,
+                headers=request_headers,
+            )
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         first = pool.submit(send, '/start', body)
         second = pool.submit(send, '/start', body)
         edit = pool.submit(send, '/scope', {'revision': 1, 'value': '203.0.113.0/24'})
-        statuses = sorted([first.result(timeout=15).status_code, second.result(timeout=15).status_code])
-        edit_status = edit.result(timeout=15).status_code
+        start_responses = [
+            first.result(timeout=15),
+            second.result(timeout=15),
+        ]
+        edit_response = edit.result(timeout=15)
+
+        statuses = sorted(response.status_code for response in start_responses)
+        edit_status = edit_response.status_code
+
+        print(
+            "CONCURRENCY_DIAGNOSTIC:",
+            {
+                "start": [
+                    {
+                        "status": response.status_code,
+                        "body": response.json(),
+                    }
+                    for response in start_responses
+                ],
+                "scope_edit": {
+                    "status": edit_response.status_code,
+                    "body": edit_response.json(),
+                },
+            },
+        )
+    assessment_id = UUID(path.rsplit('/', 1)[1])
+
+    authorization_count = committed_db.scalar(
+        select(func.count())
+        .select_from(AssessmentStartAuthorization)
+        .where(AssessmentStartAuthorization.assessment_id == assessment_id)
+    )
+
+    event_count = committed_db.scalar(
+        select(func.count())
+        .select_from(AssessmentStartEvent)
+        .join(
+            AssessmentStartAuthorization,
+            AssessmentStartEvent.authorization_id == AssessmentStartAuthorization.id,
+        )
+        .where(AssessmentStartAuthorization.assessment_id == assessment_id)
+    )
+
     if edit_status == 201:
         assert statuses == [409, 409]
-        assert committed_db.scalar(select(func.count()).select_from(AssessmentStartAuthorization)) == 0
+        assert authorization_count == 0
+        assert event_count == 0
     else:
         assert edit_status == 403
         assert statuses == [200, 201]
-        assert committed_db.scalar(select(func.count()).select_from(AssessmentStartEvent)) == 1
+        assert authorization_count == 1
+        assert event_count == 1
 
 
 def test_review_fails_closed_without_policy_evidence_or_signing_key(

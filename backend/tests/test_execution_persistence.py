@@ -13,6 +13,73 @@ from app.models import (Assessment, BaselineExecutionRequest, ExecutionAttempt, 
 from test_scheduling_start import prepared, get_review, confirm, scheduling_concurrency  # noqa: F401
 
 
+
+@pytest.fixture
+def db(engine):
+    """Owner-role session for synthetic persistence tests only."""
+    from dotenv import dotenv_values
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.orm import sessionmaker
+
+    values = dotenv_values(".env")
+    runtime_raw = values.get("UPTIP_DATABASE_URL")
+    owner_raw = values.get("UPTIP_MIGRATION_DATABASE_URL")
+
+    if not runtime_raw or not owner_raw:
+        pytest.fail("Missing database configuration for persistence tests")
+
+    runtime_url = make_url(runtime_raw)
+    owner_url = make_url(owner_raw)
+
+    if not (
+        runtime_url.drivername == owner_url.drivername == "postgresql+psycopg"
+        and runtime_url.username == "uptip_runtime"
+        and owner_url.username == "uptip"
+        and runtime_url.database == owner_url.database == "uptip"
+        and runtime_url.host == owner_url.host == "127.0.0.1"
+        and runtime_url.port == owner_url.port
+        and runtime_url.port in (None, 5432)
+        and not runtime_url.query
+        and not owner_url.query
+    ):
+        pytest.fail("Unsafe persistence-test database configuration")
+
+    test_url = owner_url.set(database="uptip_test_readiness_fix")
+    test_engine = create_engine(test_url, hide_parameters=True)
+
+    try:
+        with test_engine.connect() as connection:
+            identity = connection.execute(text("""
+                SELECT current_database(),
+                       shobj_description(oid, 'pg_database')
+                FROM pg_database
+                WHERE datname = current_database()
+            """)).one()
+
+            if identity != (
+                "uptip_test_readiness_fix",
+                "UPTIP disposable integration test database",
+            ):
+                pytest.fail("Persistence-test database safety verification failed")
+
+            connection.rollback()  # End the read-only identity-check transaction.
+            transaction = connection.begin()
+
+            try:
+                factory = sessionmaker(
+                    bind=connection,
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                with factory() as session:
+                    yield session
+            finally:
+                if transaction.is_active:
+                    transaction.rollback()
+    finally:
+        test_engine.dispose()
+
 @pytest.fixture
 def queued(client, db, prepared):
     path, headers, _ = prepared
@@ -332,7 +399,7 @@ def test_persistence_does_not_enable_dispatch_or_runtime_authorization(db,queued
         state=load_nmap_runtime_state(db,bound_plan=bound,execution_request_id=queued.id)
     assert decision.authorized is False and decision.reason_code=='worker_ownership_required'
     assert state.authorization_valid is False
-    assert db.scalar(select(Assessment.status))=='Testing'
+    assert db.scalar(select(Assessment.status).where(Assessment.id == queued.assessment_id)) == 'Testing'
     assert db.get(BaselineExecutionRequest,queued.id).status=='Queued'
 
 
