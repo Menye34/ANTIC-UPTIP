@@ -10,6 +10,17 @@ from app.models import Assessment, AssessmentStartAuthorization, AssessmentStart
 from test_assessment_start import start_case, confirmation, review  # noqa: F401
 
 
+def count_for_assessment(db, model, path):
+    assessment_id = UUID(path.rsplit('/', 1)[1])
+    if model is AssessmentStartEvent:
+        return db.scalar(select(func.count()).select_from(AssessmentStartEvent)
+                         .join(AssessmentStartAuthorization,
+                               AssessmentStartEvent.authorization_id == AssessmentStartAuthorization.id)
+                         .where(AssessmentStartAuthorization.assessment_id == assessment_id))
+    return db.scalar(select(func.count()).select_from(model)
+                     .where(model.assessment_id == assessment_id))
+
+
 @pytest.mark.parametrize('partial', [False, True])
 def test_start_queues_exactly_authorized_work(client, db, start_case, monkeypatch, partial):
     import socket
@@ -37,8 +48,8 @@ def test_start_queues_exactly_authorized_work(client, db, start_case, monkeypatc
     assert receipt['execution_authorized'] is False
     retry = client.post(path + '/start', headers=headers, json=body)
     assert retry.status_code == 200 and retry.json() == receipt
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest)) == 1
-    assert db.scalar(select(AssessmentStartEvent)).to_status == 'Testing'
+    assert count_for_assessment(db, BaselineExecutionRequest, path) == 1
+    assert db.scalar(select(AssessmentStartEvent).join(AssessmentStartAuthorization, AssessmentStartEvent.authorization_id == AssessmentStartAuthorization.id).where(AssessmentStartAuthorization.assessment_id == UUID(path.rsplit('/', 1)[1]))).to_status == 'Testing'
     overview = client.get(path + '/testing').json()
     assert overview['counts']['queued'] == 1
     assert overview['counts']['in_progress'] == overview['counts']['completed'] == 0
@@ -67,9 +78,9 @@ def test_scheduling_failure_rolls_back_all_start_changes(client, db, engine, sta
         assert client.post(path + '/start', headers=headers, json=body).status_code == 503
     finally:
         event.remove(engine, 'before_cursor_execute', fail_insert)
-    assert db.scalar(select(func.count()).select_from(AssessmentStartAuthorization)) == 0
-    assert db.scalar(select(func.count()).select_from(AssessmentStartEvent)) == 0
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest)) == 0
+    assert count_for_assessment(db, AssessmentStartAuthorization, path) == 0
+    assert count_for_assessment(db, AssessmentStartEvent, path) == 0
+    assert count_for_assessment(db, BaselineExecutionRequest, path) == 0
     assert client.get(path).json()['status'] == 'Draft'
 
 
@@ -94,7 +105,7 @@ def test_rejected_start_never_schedules(client, db, start_case, failure):
         assert client.post(path + '/scope', headers=headers,
                            json={'revision': 1, 'value': '203.0.113.0/24'}).status_code == 201
     assert client.post(path + '/start', headers=headers, json=body).status_code >= 400
-    assert db.scalar(select(func.count()).select_from(BaselineExecutionRequest)) == 0
+    assert count_for_assessment(db, BaselineExecutionRequest, path) == 0
     assert client.get(path).json()['status'] == 'Draft'
 
 
@@ -116,7 +127,7 @@ def test_database_prevents_duplicate_scheduling(client, db, start_case):
     path, headers, _, _, _ = start_case
     response = client.post(path + '/start', headers=headers, json=confirmation(review(client, path)))
     assert response.status_code == 201
-    request = db.scalar(select(BaselineExecutionRequest))
+    request = db.scalar(select(BaselineExecutionRequest).where(BaselineExecutionRequest.assessment_id == UUID(path.rsplit('/', 1)[1])))
     with pytest.raises(IntegrityError):
         with db.begin_nested():
             db.add(BaselineExecutionRequest(
@@ -172,9 +183,9 @@ def test_concurrent_start_has_one_authorization_and_queue(engine, monkeypatch, s
             statuses = sorted([first.result(timeout=15).status_code, second.result(timeout=15).status_code])
         assert statuses == ([200, 201] if same_key else [201, 409])
         with factory() as check:
-            assert check.scalar(select(func.count()).select_from(AssessmentStartAuthorization)) == 1
-            assert check.scalar(select(func.count()).select_from(AssessmentStartEvent)) == 1
-            assert check.scalar(select(func.count()).select_from(BaselineExecutionRequest)) == 1
+            assert count_for_assessment(check, AssessmentStartAuthorization, path) == 1
+            assert count_for_assessment(check, AssessmentStartEvent, path) == 1
+            assert count_for_assessment(check, BaselineExecutionRequest, path) == 1
     finally:
         # This engine is the positively verified disposable test database.
         with engine.begin() as connection:
