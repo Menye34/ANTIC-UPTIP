@@ -228,11 +228,15 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
               <div><dt>Targets under test</dt><dd>{[...new Set(data.executions.map(row => row.target))].join(', ')}</dd></div>
               <div><dt>Baseline</dt><dd>{[...new Set(data.executions.map(row => `${row.test_name} v${row.profile_version}`))].join(', ')}</dd></div>
               <div><dt>Automation policy</dt><dd>{scope?.policy?.id ? `${scope.policy.id} v${scope.policy.version ?? '—'}` : 'Not provided'}</dd></div>
+              <div><dt>Authorization mode</dt><dd>{scope?.mode ?? 'Not recorded'}</dd></div>
+              <div><dt>Excluded targets</dt><dd>{scope?.excluded_targets.length ?? 0}</dd></div>
+              <div><dt>Excluded activities</dt><dd>{scope?.excluded_activities.length ?? 0}</dd></div>
               <div><dt>Authorized by</dt><dd>Not provided by the Testing API.</dd></div>
             </dl></section>
           <section className="analyst-card"><h2>Discovered So Far</h2><p>Discovery and security-test results.</p>
             <div className="testing-discoveries">{['Open ports', 'Services', 'Web target'].map(label => <div key={label}><strong>—</strong><small>{label}</small></div>)}</div>
-            <p>Port, service and web-target totals are not provided by this API.</p>
+            <p>Port, service and web-target totals are not provided by this API. Recorded host discovery observations are listed below.</p>
+            <p>{data.discovered_so_far.filter(item => item.type === 'host_discovery' && item.data?.status === 'up').length} responding host observations · {data.discovered_so_far.filter(item => item.partial).length} partial observations</p>
             {data.discovered_so_far.length ? <ul>{data.discovered_so_far.map(item => <li key={item.id}>
               {item.type === 'host_discovery' && typeof item.data?.address === 'string' && typeof item.data?.status === 'string'
                 ? `${item.data.address}: ${item.data.status}` : item.type}{item.partial && ' (partial)'}</li>)}</ul> : <p>No discovery observations recorded.</p>}
