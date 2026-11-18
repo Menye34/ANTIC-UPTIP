@@ -149,6 +149,7 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   const [selected, setSelected] = useState<string>()
+  const [activeTab, setActiveTab] = useState<'activity' | 'recommendations'>('activity')
   const detailButton = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
@@ -188,15 +189,35 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
         <img src={plus} alt="" />Run Manual Test</button>
     </header>
     <div className="testing-tabs" role="tablist" aria-label="Testing views">
-      <button type="button" role="tab" id="test-activity-tab" aria-selected="true" aria-controls="test-activity-panel">Test Activity</button>
-      <button type="button" role="tab" aria-selected="false" disabled title="Recommendations are unavailable in this release">Recommendations</button>
+      <button type="button" role="tab" id="test-activity-tab" aria-selected={activeTab === 'activity'} aria-controls="test-activity-panel" onClick={() => setActiveTab('activity')}>Test Activity</button>
+      <button type="button" role="tab" id="recommendations-tab" aria-selected={activeTab === 'recommendations'} aria-controls="recommendations-panel" onClick={() => setActiveTab('recommendations')}>Recommendations <span className="testing-recommendation-count" aria-label="0 recommendations">0</span></button>
       <button type="button" role="tab" aria-selected="false" disabled title="Testing Completion is unavailable in this release">Testing Completion</button>
     </div>
     {error && <section className="testing-load-error analyst-card" role="alert"><p>{error}</p>
       {data && <p>Displaying the last retrieved data; current status is unverified.</p>}
       <button className="analyst-link" type="button" onClick={() => setRetry(n => n + 1)}>Retry</button></section>}
     {!data && !error && <p role="status">Loading Testing…</p>}
-    {data && <div role="tabpanel" id="test-activity-panel" aria-labelledby="test-activity-tab" className="testing-panel">
+    {data && <div role="tabpanel" id={activeTab === 'activity' ? 'test-activity-panel' : 'recommendations-panel'} aria-labelledby={activeTab === 'activity' ? 'test-activity-tab' : 'recommendations-tab'} className="testing-panel">
+      {activeTab === 'recommendations' ? <>
+        <div className="testing-metrics">{[
+          ['Total Tests', data.counts.total], ['In Progress', data.counts.in_progress],
+          ['Completed', data.counts.completed], ['Failed', data.counts.failed],
+        ].map(([label, value]) => <section className="analyst-card" key={label} aria-label={String(label)}>
+          <p>{label}</p><strong>{value}</strong></section>)}</div>
+        <section className="testing-notice" aria-label="Current Status"><img src={information} alt="" />
+          <div><h2>Current Status</h2><p>{data.counts.total === 0
+            ? 'No tests have been scheduled. Recommendations will appear when supported results become available.'
+            : 'Recommendations are based on the information currently available. '}
+            {data.counts.total > 0 && <StatusMessage data={data} />}</p></div></section>
+        <section className="analyst-card testing-recommendations" aria-label="Recommendations">
+          <h2>Recommendations</h2>
+          <div className="testing-recommendations-empty">
+            <div className="testing-recommendations-empty-icon" aria-hidden="true">⌕</div>
+            <h3>No suggested next steps yet</h3>
+            <p>No recommendations are available for this assessment yet. Suggested next steps will appear here when supported analysis is available.</p>
+          </div>
+        </section>
+      </> : <>
       <div className="testing-metrics">{[
         ['Total Tests', data.counts.total], ['In Progress', data.counts.in_progress],
         ['Completed', data.counts.completed], ['Failed', data.counts.failed],
@@ -251,6 +272,7 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
             <button type="button" className="analyst-link" disabled title="Audit Log is unavailable in this release">View Audit Log</button>
           </section>
         </div>
+      </>}
       </>}
     </div>}
     {selected && <Details key={selected} assessmentId={assessmentId} executionId={selected} onExpired={onExpired}
