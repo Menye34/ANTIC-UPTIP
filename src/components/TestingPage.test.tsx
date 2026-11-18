@@ -36,7 +36,7 @@ it('distinguishes loading from the empty T-00 state', async () => {
   expect(screen.queryByRole('table')).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Run Manual Test' })).toBeDisabled()
   expect(screen.getByRole('tab', { name: /Recommendations/ })).toBeEnabled()
-  expect(screen.getByRole('tab', { name: 'Testing Completion' })).toBeDisabled()
+  expect(screen.getByRole('tab', { name: 'Testing Completion' })).toBeEnabled()
 })
 
 it.each(['Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled'] as ExecutionStatus[])(
@@ -353,4 +353,29 @@ it.each([401, 403, 404])('does not convert recommendation access failure %s into
   expect(await screen.findByRole('alert')).toHaveTextContent(status === 401 ? 'session has ended' : 'Recommendations unavailable')
   expect(screen.queryByText('No suggested next steps yet')).not.toBeInTheDocument()
   expect(expired).toHaveBeenCalledTimes(status === 401 ? 1 : 0)
+})
+
+it('opens Testing Completion inside the existing Testing tab and blocks incomplete tests', async () => {
+  const snapshot = {
+    assessment_id: assessmentId, lifecycle_status: 'Testing', ready: false,
+    snapshot_digest: 'a'.repeat(64),
+    summary: {
+      total: 1, counts: { Queued: 1, Running: 0, Completed: 0, Failed: 0,
+        Stopped: 0, Blocked: 0, Cancelled: 0 },
+      active_attempts: 0, processing_errors: 0, processing_pending: 0,
+      missing_processing: 0, recommendation_count: 0,
+      pending_recommendation_ids: [], reviewed_recommendations: 0,
+      candidate_findings: null, blockers: ['active_tests'],
+    },
+    recommendations: [], completion: null,
+  }
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => reply(
+    String(input).endsWith('/testing/completion') ? snapshot : testingData(['Queued']))))
+  page()
+  await screen.findByRole('table', { name: 'Test Activity' })
+  fireEvent.click(screen.getByRole('tab', { name: 'Testing Completion' }))
+  expect(await screen.findByRole('heading', { name: 'Testing Completion Review' })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Complete Testing' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'View Tests' }))
+  expect(screen.getByRole('table', { name: 'Test Activity' })).toBeVisible()
 })
