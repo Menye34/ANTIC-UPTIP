@@ -147,3 +147,22 @@ def execution_details(assessment_id: UUID, execution_id: UUID,
                               'partial': o.is_partial, 'evidence_id': o.evidence_id} for o in observations],
             'events': [{'id': e.id, 'event': e.event_type, 'reason_code': e.reason_code,
                         'occurred_at': e.occurred_at, 'attempt_id': e.attempt_id} for e in events]}
+
+
+@router.get('/recommendations')
+def list_recommendations(assessment_id: UUID, user: User = Depends(analyst),
+                         db: Session = Depends(get_db)):
+    """Read-only, access-controlled suggestions; never authorizes test execution."""
+    from .recommendation_planner import plan_recommendations
+
+    assessment_for(db, assessment_id, user)
+    observations = db.scalars(select(SecurityObservation).where(
+        SecurityObservation.assessment_id == assessment_id,
+    ).order_by(SecurityObservation.collected_at, SecurityObservation.id)).all()
+    recommendations = plan_recommendations(observations)
+    return {
+        'assessment_id': assessment_id,
+        'count': len(recommendations),
+        'recommendations': recommendations,
+        'execution_authorized': False,
+    }
