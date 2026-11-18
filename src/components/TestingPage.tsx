@@ -1,3 +1,4 @@
+import TestingCompletion from './TestingCompletion'
 import { useEffect, useRef, useState } from 'react'
 import { AssessmentStartError } from '../services/assessmentStart'
 import { getExecutionDetails, getOriginalOutput, getRecommendationCheck, getRecommendations, getTesting } from '../services/testing'
@@ -14,69 +15,6 @@ function timestamp(value: string | null) {
   return Number.isNaN(date.valueOf()) ? 'Not recorded' : date.toLocaleString()
 }
 
-
-function CompletionReview({ data, onContinue, onRecommendations }: {
-  data: TestingData; onContinue: () => void; onRecommendations: () => void
-}) {
-  const counts = data.counts
-  const unfinished = counts.queued + counts.in_progress
-  const interrupted = counts.failed + counts.stopped + counts.blocked + counts.cancelled
-  const checks = [
-    {
-      title: 'Running or failed tests',
-      description: unfinished
-        ? `${unfinished} test(s) are still queued or running.`
-        : interrupted
-          ? `${interrupted} test(s) failed, stopped, were blocked or cancelled and require review.`
-          : counts.total === 0 ? 'No tests have been scheduled.'
-            : `All ${counts.total} tests have finished successfully.`,
-      status: unfinished || interrupted || counts.total === 0 ? 'Needs attention' : 'Clear',
-      action: 'View Tests', onClick: onContinue,
-    },
-    {
-      title: 'Pending recommendations',
-      description: 'Recommendation decisions are not yet available from the Testing Completion API.',
-      status: 'Needs attention', action: 'Review Recommendations', onClick: onRecommendations,
-    },
-    {
-      title: 'Candidate findings',
-      description: 'Candidate finding totals are not yet provided by the Testing Completion API.',
-      status: 'Next stage', action: '', onClick: undefined,
-    },
-    {
-      title: 'Processing errors',
-      description: 'Processing error clearance has not yet been verified by the Testing Completion API.',
-      status: 'Needs attention', action: '', onClick: undefined,
-    },
-  ]
-  return <>
-    <div className="testing-metrics">{[
-      ['Total Tests', counts.total], ['In Progress', counts.in_progress],
-      ['Completed', counts.completed], ['Failed', counts.failed],
-    ].map(([label, value]) => <section className="analyst-card" key={label} aria-label={String(label)}>
-      <p>{label}</p><strong>{value}</strong></section>)}</div>
-    <section className="testing-notice" aria-label="Completion unavailable">
-      <img src={information} alt="" /><div><h2>Completion unavailable</h2>
-      <p>{unfinished ? 'Wait for queued and running tests to finish before completing the testing phase.'
-        : interrupted ? 'Review unsuccessful or interrupted tests before completing the testing phase.'
-          : 'Completion readiness has not yet been verified. The testing phase cannot be completed from this view.'}</p></div>
-    </section>
-    <section className="analyst-card testing-completion-review" aria-label="Testing Completion Review">
-      <h2>Testing Completion Review</h2>
-      <p>Review these items before you end the testing phase.</p>
-      <div className="testing-completion-checks">{checks.map(check => <div className="testing-completion-check" key={check.title}>
-        <div><h3>{check.title}</h3><p>{check.description}</p></div>
-        <span className="testing-completion-status">{check.status}</span>
-        {check.onClick ? <button type="button" className="analyst-link" onClick={check.onClick}>{check.action}</button> : null}
-      </div>)}</div>
-      <p className="testing-completion-help">Complete Testing becomes available once all required checks are verified.</p>
-      <div className="testing-completion-actions">
-        <button type="button" onClick={onContinue}>Continue Testing</button>
-        <button type="button" className="analyst-create" disabled title="Completion readiness and confirmation are not yet supported">Complete Testing</button>
-      </div>
-    </section>
-  </>
-}
 
 function StatusMessage({ data }: { data: TestingData }) {
   const c = data.counts
@@ -305,7 +243,7 @@ export default function TestingPage(props: TestingPageProps) {
   return <TestingAssessment key={props.assessmentId} {...props} />
 }
 
-function TestingAssessment({ assessmentId, onExpired }: TestingPageProps) {
+function TestingAssessment({ assessmentId, onExpired, csrfToken }: TestingPageProps) {
   const [data, setData] = useState<TestingData>()
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
@@ -392,7 +330,7 @@ function TestingAssessment({ assessmentId, onExpired }: TestingPageProps) {
       <button className="analyst-link" type="button" onClick={() => setRetry(n => n + 1)}>Retry</button></section>}
     {!data && !error && <p role="status">Loading Testing…</p>}
     {data && <div role="tabpanel" id={activeTab === 'activity' ? 'test-activity-panel' : activeTab === 'recommendations' ? 'recommendations-panel' : 'testing-completion-panel'} aria-labelledby={activeTab === 'activity' ? 'test-activity-tab' : activeTab === 'recommendations' ? 'recommendations-tab' : 'testing-completion-tab'} className="testing-panel">
-      {activeTab === 'completion' ? <CompletionReview data={data} onContinue={() => setActiveTab('activity')} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
+      {activeTab === 'completion' ? <TestingCompletion assessmentId={assessmentId} csrfToken={csrfToken} testing={data} onExpired={onExpired} onContinue={() => setActiveTab('activity')} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
         <div className="testing-metrics">{[
           ['Total Tests', data.counts.total], ['In Progress', data.counts.in_progress],
           ['Completed', data.counts.completed], ['Failed', data.counts.failed],
