@@ -153,3 +153,23 @@
   .testing-review-dialog { inset: 0 0 0 auto; height: 100dvh; max-height: 100dvh; }
   .testing-review-dialog::backdrop { clip-path: none; }
 }
+
+
+/* TC-01 — Testing Completion review within the existing Testing tabs. */
+.testing-completion-review > p { margin: 10px 0 18px; color: #475569; font-size: 13px; }
+.testing-completion-checks { border-top: 1px solid #e2e8f0; }
+.testing-completion-check { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 20px; padding: 20px 0; border-bottom: 1px solid #e2e8f0; }
+.testing-completion-check h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: #1e293b; }
+.testing-completion-check p { margin: 0; font-size: 13px; color: #64748b; line-height: 1.5; }
+.testing-completion-status { white-space: nowrap; font-size: 12px; font-weight: 600; color: #92400e; background: #fffbeb; border-radius: 6px; padding: 6px 10px; }
+.testing-completion-check:nth-child(3) .testing-completion-status { color: #2563eb; background: #eff6ff; }
+.testing-completion-check .analyst-link { white-space: nowrap; }
+.testing-completion-help { margin-top: 20px !important; }
+.testing-completion-actions { display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.testing-completion-actions button { min-height: 40px; padding: 8px 16px; border-radius: 6px; }
+.testing-completion-actions > button:first-child { border: 1px solid #cbd5e1; background: white; color: #334155; cursor: pointer; }
+.testing-completion-actions > button:disabled { opacity: .55; cursor: not-allowed; }
+@media(max-width: 700px) {
+  .testing-completion-check { grid-template-columns: minmax(0,1fr) auto; gap: 12px; }
+  .testing-completion-check .analyst-link { grid-column: 1 / -1; justify-self: start; }
+}
