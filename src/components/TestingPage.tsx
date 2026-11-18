@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { AssessmentStartError } from '../services/assessmentStart'
-import { getExecutionDetails, getRecommendations, getTesting } from '../services/testing'
+import { getExecutionDetails, getOriginalOutput, getRecommendationCheck, getRecommendations, getTesting } from '../services/testing'
 import type { ExecutionDetails, Recommendation, RecommendationData, TestingData } from '../services/testing'
 import plus from '../assets/testing/Plus.svg'
 import information from '../assets/testing/Information.svg'
+import clock from '../assets/testing/Clock.svg'
 import marker from '../assets/testing/Marker.svg'
 import './TestingPage.css'
 
@@ -22,12 +23,38 @@ function StatusMessage({ data }: { data: TestingData }) {
     {c.cancelled > 0 && `${c.cancelled} cancelled. `}Select View Details to review the latest available execution information.</p>
 }
 
+function OriginalOutput({ assessmentId, executionId, evidence, onExpired }: {
+  assessmentId: string; executionId: string; evidence: ExecutionDetails['evidence'][number]; onExpired: () => void
+}) {
+  const [output, setOutput] = useState<string>()
+  const [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
+  useEffect(() => {
+    const controller = new AbortController()
+    void getOriginalOutput(assessmentId, executionId, evidence.id, controller.signal).then(result => {
+      if (!controller.signal.aborted) setOutput(result.content)
+    }).catch((failure: unknown) => {
+      if (controller.signal.aborted) return
+      setError('Original tool output is unavailable.')
+      if (failure instanceof AssessmentStartError && failure.status === 401) onExpired()
+    })
+    return () => controller.abort()
+  }, [assessmentId, executionId, evidence.id, onExpired, retry])
+  return <div className="testing-output">
+    <p>{evidence.format}{evidence.partial ? ' · Partial output' : ''} · {timestamp(evidence.collected_at)}</p>
+    {error ? <div role="alert"><p>{error}</p><button type="button" className="analyst-link" onClick={() => { setError(''); setRetry(n => n + 1) }}>Retry output</button></div>
+      : output === undefined ? <p role="status">Loading original tool output…</p>
+      : <pre tabIndex={0} aria-label="Original scanner output">{output}</pre>}
+  </div>
+}
+
 function Details({ assessmentId, executionId, onClose, onExpired }: {
   assessmentId: string; executionId: string; onClose: () => void; onExpired: () => void
 }) {
   const [data, setData] = useState<ExecutionDetails>()
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
+  const [outputOpen, setOutputOpen] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     dialog.current?.showModal()
@@ -42,95 +69,58 @@ function Details({ assessmentId, executionId, onClose, onExpired }: {
     })
     return () => controller.abort()
   }, [assessmentId, executionId, onExpired, retry])
-
   const lastAttempt = data?.attempts.at(-1)
-  const isRunning = data?.status === 'Running'
-  const isFailed = data?.status === 'Failed'
-  const isCompleted = data?.status === 'Completed'
-  const stateTitle = isRunning ? 'Running Test Details' : isFailed ? 'Failed Test Details'
-    : isCompleted ? 'Completed Test Details' : 'Execution Details'
-  const totalObservations = data?.processing.reduce((sum, item) => sum + item.observation_count, 0) ?? 0
-
-  return <dialog className="testing-details analyst-card" ref={dialog} aria-labelledby="execution-details-title" onCancel={onClose}>
-    <div className="testing-details-heading">
-      <h2 id="execution-details-title">{stateTitle}</h2>
-      <button type="button" className="analyst-link" onClick={onClose}>Close</button>
+  const hosts = data?.observations.filter(item => item.type === 'host_discovery'
+    && typeof item.data.address === 'string' && ['up', 'down'].includes(String(item.data.status))) ?? []
+  return <dialog className="testing-details testing-review-dialog" ref={dialog} aria-labelledby="execution-details-title"
+    onCancel={event => { event.preventDefault(); onClose() }}>
+    <header className="testing-review-header"><h2 id="execution-details-title">Test Details</h2>
+      <button type="button" aria-label="Close" onClick={onClose}>×</button></header>
+    <div className="testing-review-body testing-details-body">
+      {error ? <div role="alert"><p>{error}</p><button type="button" className="analyst-link" onClick={() => { setError(''); setRetry(n => n + 1) }}>Retry</button></div>
+        : !data ? <p role="status">Loading execution details…</p> : <>
+          <section aria-label="Selected Test"><h3>{data.test_name}</h3>
+            <span className="testing-state testing-status-badge" data-status={data.status}>{data.status}</span>
+            <p>Tool: {data.tool}</p><p>Target: {data.target}</p>
+            <p className="testing-detail-status" role="status">{data.status === 'Completed'
+              ? 'The test has finished. Review the available results below.'
+              : data.status === 'Running' ? 'This test is in progress. Results may still be processing.'
+              : data.status === 'Failed' ? 'This test failed. Available results may be incomplete.'
+              : data.status === 'Queued' ? 'This test is queued and has not started.'
+              : `This test is ${data.status.toLowerCase()}. Available results may be incomplete.`}</p>
+          </section>
+          <section aria-label="Test Results"><h3>Test Results</h3>
+            {hosts.length ? <>
+              <p>Host discovery observations are available. Port and service information was not collected by this test.</p>
+              <div className="testing-results-table"><table><thead><tr><th>Host</th><th>Status</th></tr></thead>
+                <tbody>{hosts.map(item => <tr key={item.id}><td>{String(item.data.address)}</td>
+                  <td>{item.data.status === 'up' ? 'Responding' : 'Not responding'}{item.partial ? ' · Partial' : ''}</td></tr>)}</tbody></table></div>
+            </> : <p>No processed host-discovery results are available. Port, service and version information was not collected by this profile.</p>}
+          </section>
+          <details className="testing-disclosure" onToggle={event => setOutputOpen(event.currentTarget.open)}>
+            <summary>Original Tool Output</summary>
+            {outputOpen && (data.evidence.length ? data.evidence.map(item => <OriginalOutput key={item.id}
+              assessmentId={assessmentId} executionId={executionId} evidence={item} onExpired={onExpired} />)
+              : <p>No scanner evidence recorded.</p>)}
+          </details>
+          <details className="testing-disclosure"><summary>Technical Details</summary>
+            <dl className="testing-review-fields testing-detail-grid">
+              <div><dt>Tool</dt><dd>{data.tool}</dd></div><div><dt>Target</dt><dd>{data.target}</dd></div>
+              <div><dt>Profile</dt><dd>{data.test_name} v{data.profile_version}</dd></div>
+              <div><dt>Execution state</dt><dd>{data.status}</dd></div>
+              <div><dt>Started</dt><dd>{timestamp(lastAttempt?.started_at ?? null)}</dd></div>
+              <div><dt>Finished</dt><dd>{timestamp(lastAttempt?.finished_at ?? null)}</dd></div>
+            </dl>
+            {!data.attempts.length ? <p>No execution attempt recorded. Queued does not mean Running.</p>
+              : data.attempts.map(attempt => <p key={attempt.id}>Attempt {attempt.attempt_number}: {attempt.status}
+                {attempt.reason_code && ` · ${attempt.reason_code.replace(/_/g, ' ')}`}</p>)}
+            {data.status === 'Failed' && <div><h4>Failure Information</h4><p>{lastAttempt?.reason_code?.replace(/_/g, ' ') ?? 'No failure details recorded.'}</p>
+              <p>Exit code: {lastAttempt?.exit_code ?? 'Not recorded'}</p></div>}
+            <h4>Result processing</h4>{!data.processing.length ? <p>No processing outcome recorded.</p>
+              : data.processing.map(item => <p key={item.id}>{item.status} · {item.observation_count} observations{item.partial && ' · Partial'}</p>)}
+          </details>
+        </>}
     </div>
-    {error ? <div role="alert"><p>{error}</p><button type="button" className="analyst-link" onClick={() => { setError(''); setRetry(n => n + 1) }}>Retry</button></div>
-      : !data ? <p role="status">Loading execution details…</p> : <>
-        <div className="testing-detail-summary">
-          <div><h3>{data.test_name}</h3><p>{data.tool} · {data.target}</p></div>
-          <span className="testing-state" data-status={data.status}>{data.status}</span>
-        </div>
-        <p className="testing-detail-status" role="status">
-          {isCompleted ? 'The test completed. Review the persisted results and evidence below.'
-            : isRunning ? 'This test is in progress. Results may not be available until processing completes.'
-            : isFailed ? 'This test failed. Review the recorded reason and any partial evidence.'
-            : data.status === 'Queued' ? 'This test is queued and has not started.'
-            : `Execution status: ${data.status}. Review the recorded information below.`}
-        </p>
-        <section className="testing-detail-section" aria-label="Execution overview">
-          <h3>Execution Overview</h3>
-          <dl className="testing-detail-grid">
-            <div><dt>Test</dt><dd>{data.test_name}</dd></div>
-            <div><dt>Tool</dt><dd>{data.tool}</dd></div>
-            <div><dt>Target</dt><dd>{data.target}</dd></div>
-            <div><dt>Status</dt><dd>{data.status}</dd></div>
-            <div><dt>Started</dt><dd>{timestamp(lastAttempt?.started_at ?? null)}</dd></div>
-            <div><dt>Finished</dt><dd>{timestamp(lastAttempt?.finished_at ?? null)}</dd></div>
-          </dl>
-        </section>
-        {isFailed && <section className="testing-detail-section" aria-label="Failure information">
-          <h3>Failure Information</h3>
-          <dl className="testing-metadata">
-            <div><dt>Reason code</dt><dd>{lastAttempt?.reason_code ?? 'Not recorded'}</dd></div>
-            <div><dt>Exit code</dt><dd>{lastAttempt?.exit_code ?? 'Not recorded'}</dd></div>
-            <div><dt>Recovery status</dt><dd>{lastAttempt?.recovery_reason ?? 'Not recorded'}</dd></div>
-          </dl>
-        </section>}
-        <section className="testing-detail-section" aria-label="Test results">
-          <h3>{isRunning ? 'Progress & Results' : 'Test Results'}</h3>
-          <div className="testing-result-metrics">
-            <div><strong>{totalObservations}</strong><span>Processed observations</span></div>
-            <div><strong>{data.evidence.length}</strong><span>Evidence records</span></div>
-            <div><strong>{data.processing.length}</strong><span>Processing runs</span></div>
-          </div>
-          {data.observations.length ? <ul className="testing-detail-list">{data.observations.map(item =>
-            <li key={item.id}>{item.type}{item.partial ? ' · Partial result' : ''}</li>)}</ul>
-            : <p>No processed observations recorded.</p>}
-        </section>
-        <section className="testing-detail-section" aria-label="Evidence summaries">
-          <h3>Supporting Evidence</h3>
-          {data.evidence.length ? <ul className="testing-detail-list">{data.evidence.map(item =>
-            <li key={item.id}>{item.format} · {item.size_bytes} bytes{item.partial ? ' · Partial' : ''} · {timestamp(item.collected_at)}</li>)}</ul>
-            : <p>No scanner evidence recorded.</p>}
-        </section>
-        <details className="testing-detail-section" open>
-          <summary>Technical Details</summary>
-          <dl className="testing-metadata">
-            <div><dt>Execution ID</dt><dd>{data.id}</dd></div>
-            <div><dt>Tool</dt><dd>{data.tool}</dd></div>
-            <div><dt>Target</dt><dd>{data.target}</dd></div>
-            <div><dt>Profile</dt><dd>{data.profile_id} v{data.profile_version}</dd></div>
-            <div><dt>Dispatch status</dt><dd>{data.dispatch_status}</dd></div>
-          </dl>
-          <h3>Execution attempts</h3>
-          {!data.attempts.length ? <p>No execution attempt recorded. Queued does not mean Running.</p>
-            : data.attempts.map(attempt => <p key={attempt.id}>Attempt {attempt.attempt_number}: {attempt.status}
-              {' · Started: '}{timestamp(attempt.started_at)}{' · Finished: '}{timestamp(attempt.finished_at)}
-              {attempt.reason_code && ` · ${attempt.reason_code}`}
-              {attempt.recovery_reason && ` · ${attempt.recovery_reason}`}</p>)}
-          <h3>Result processing</h3>
-          {!data.processing.length ? <p>No processing outcome recorded.</p> : data.processing.map(item =>
-            <p key={item.id}>{item.status} · {item.observation_count} observations
-              {item.partial && ' · Partial'}{item.error_code && ` · ${item.error_code}`}</p>)}
-          <h3>Execution timeline</h3>
-          {data.events.length ? <ul className="testing-detail-list">{data.events.map(item =>
-            <li key={item.id}>{eventLabel(item.event)} · {timestamp(item.occurred_at)}</li>)}</ul>
-            : <p>No execution events recorded.</p>}
-        </details>
-        <p className="testing-secondary">Read-only execution information. This view does not authorize scanner execution or expose original tool output.</p>
-      </>}
   </dialog>
 }
 
@@ -145,7 +135,69 @@ function eventLabel(event: string) {
 }
 
 
-function RecommendationReview({ recommendation, onClose }: { recommendation: Recommendation; onClose: () => void }) {
+function SuggestionFields({ recommendation }: { recommendation: Recommendation }) {
+  return <dl className="testing-review-fields testing-three-fields">
+    <div><dt>Target</dt><dd>{recommendation.target}</dd></div>
+    <div><dt>Service</dt><dd>{recommendation.service ?? 'Not identified'}</dd></div>
+    <div><dt>Port</dt><dd>{recommendation.port ?? 'Not identified'}</dd></div>
+  </dl>
+}
+
+function AlternativeReview({ assessmentId, recommendation, onExpired }: {
+  assessmentId: string; recommendation: Recommendation; onExpired: () => void
+}) {
+  const [state, setState] = useState<'checking' | 'unavailable' | 'error'>('checking')
+  const [reason, setReason] = useState('')
+  const [retry, setRetry] = useState(0)
+  useEffect(() => {
+    const controller = new AbortController()
+    void Promise.all([
+      getRecommendationCheck(assessmentId, recommendation.id, 'eligibility', controller.signal),
+      getRecommendationCheck(assessmentId, recommendation.id, 'authorization-review', controller.signal),
+    ]).then(([, review]) => {
+      if (controller.signal.aborted) return
+      setReason(review.reason_code)
+      setState('unavailable')
+    }).catch((failure: unknown) => {
+      if (controller.signal.aborted) return
+      setState('error')
+      if (failure instanceof AssessmentStartError && failure.status === 401) onExpired()
+    })
+    return () => controller.abort()
+  }, [assessmentId, recommendation.id, onExpired, retry])
+  const explanation = reason === 'followup_profile_not_supported'
+    ? 'No supported follow-up test profile is available for this recommendation.'
+    : reason === 'assessment_not_testing' ? 'This assessment is no longer in Testing.'
+    : ['target_scope_stale', 'target_out_of_scope', 'observation_target_mismatch', 'target_unavailable'].includes(reason)
+      ? 'The target or its authorized scope could not be verified for an alternative test.'
+      : 'No authorized alternative is currently available.'
+  return <>
+    <section className="testing-alternative-current" aria-label="Current Recommendation"><h3>Current Recommendation</h3>
+      <div className="testing-inset"><p className="testing-field-label">Test</p><h4>{recommendation.title}</h4>
+        <p className="testing-field-label">Tool</p><p>Not available</p><SuggestionFields recommendation={recommendation} /></div>
+    </section>
+    <section aria-label="Select Alternative"><h3>Select Alternative</h3>
+      <p>Choose an integrated security tool and one of its configured test profiles.</p>
+      <label className="testing-alternative-field" htmlFor="alternative-tool">Security Tool</label>
+      <select id="alternative-tool" disabled value=""><option value="">No verified tools available for this recommendation</option></select>
+      <label className="testing-alternative-field" htmlFor="alternative-profile">Test Profile</label>
+      <select id="alternative-profile" disabled value=""><option value="">No eligible test profiles available</option></select>
+    </section>
+    <section aria-label="Selected Test"><h3>Selected Test</h3><div className="testing-inset"><h4>No alternative selected</h4>
+      <p>Select a security tool and test profile to review the alternative.</p><p>Target: {recommendation.target}</p></div></section>
+    <section aria-label="Compatibility Status"><h3>Compatibility Status</h3>
+      <div className="testing-review-safety" role="status"><h4>{state === 'checking' ? 'Checking' : 'Unavailable'}</h4>
+        <p>{state === 'checking' ? 'Checking available profiles and current authorization constraints.'
+          : state === 'error' ? 'Unable to verify alternatives. No test can be confirmed.' : explanation}</p>
+        {state === 'error' && <button type="button" className="analyst-link" onClick={() => { setState('checking'); setRetry(n => n + 1) }}>Retry alternatives</button>}
+      </div>
+    </section>
+  </>
+}
+
+function RecommendationReview({ assessmentId, recommendation, onClose, onExpired }: {
+  assessmentId: string; recommendation: Recommendation; onClose: () => void; onExpired: () => void
+}) {
   const [choosingAlternative, setChoosingAlternative] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
@@ -154,61 +206,31 @@ function RecommendationReview({ recommendation, onClose }: { recommendation: Rec
     const element = dialog.current
     element?.showModal()
     closeButton.current?.focus()
-    return () => {
-      element?.close()
-      if (trigger?.isConnected) trigger.focus()
-    }
+    return () => { element?.close(); if (trigger?.isConnected) trigger.focus() }
   }, [])
   return <dialog ref={dialog} className="testing-review-dialog" aria-labelledby="recommendation-review-title"
     onCancel={event => { event.preventDefault(); onClose() }}>
-    <div className="testing-review-header">
-      <h2 id="recommendation-review-title">{choosingAlternative ? 'Choose Alternative' : 'Review Recommendation'}</h2>
-      <button ref={closeButton} type="button" aria-label="Close recommendation review" onClick={onClose}>×</button>
-    </div>
-    {choosingAlternative ? <div className="testing-review-body">
-      <section className="testing-alternative-current" aria-label="Current Recommendation">
-        <h3>Current Recommendation</h3>
-        <p>{recommendation.title}</p>
-        <dl className="testing-review-fields">
-          <div><dt>Target</dt><dd>{recommendation.target}</dd></div>
-          <div><dt>Suggested test</dt><dd>Not available</dd></div>
-        </dl>
-      </section>
-      <section aria-label="Select Alternative">
-        <h3>Select Alternative</h3>
-        <p>Choose an integrated security tool and one of its configured test profiles.</p>
-        <label className="testing-alternative-field" htmlFor="alternative-tool">Security Tool</label>
-        <select id="alternative-tool" disabled value=""><option value="">No verified tools available for this recommendation</option></select>
-        <label className="testing-alternative-field" htmlFor="alternative-profile">Test Profile</label>
-        <select id="alternative-profile" disabled value=""><option value="">No eligible test profiles available</option></select>
-        <p role="status" className="testing-review-safety">No authorized alternative is currently available. Tool integration alone does not establish test eligibility, scope authorization, or dispatch support.</p>
-      </section>
-    </div> : <div className="testing-review-body">
-      <h3>{recommendation.title}</h3>
-      <dl className="testing-review-fields">
-        <div><dt>Target</dt><dd>{recommendation.target}</dd></div>
-        <div><dt>Service</dt><dd>Not identified</dd></div>
-        <div><dt>Port</dt><dd>Not identified</dd></div>
-      </dl>
-      <section><h4>Why this action is suggested</h4><p>{recommendation.reason}</p></section>
-      <section><h4>Suggested test</h4><p>No executable follow-up test is supported for this observation.</p></section>
-      <section><h4>Supporting evidence</h4>
-        <dl className="testing-review-fields">
-          <div><dt>Observation ID</dt><dd>{recommendation.source_observation_id}</dd></div>
-          <div><dt>Evidence ID</dt><dd>{recommendation.source_evidence_id}</dd></div>
-        </dl>
-      </section>
-      <p className="testing-review-safety">Analyst review only. Reviewing this recommendation does not authorize or schedule a security test.</p>
-    </div>}
-    <footer className="testing-review-footer">
-      {choosingAlternative ? <>
-        <button type="button" onClick={() => setChoosingAlternative(false)}>Cancel</button>
-        <button type="button" disabled title="No verified alternative is available">Confirm Alternative</button>
-      </> : <>
-        <button type="button" onClick={onClose}>Close</button>
-        <button type="button" disabled title="No authorized executable test is available">Start Test</button>
-        <button type="button" onClick={() => setChoosingAlternative(true)}>Choose Alternative</button>
+    <header className="testing-review-header"><h2 id="recommendation-review-title">{choosingAlternative ? 'Choose Alternative' : 'Review Recommendation'}</h2>
+      <button ref={closeButton} type="button" aria-label="Close recommendation review" onClick={onClose}>×</button></header>
+    <div className="testing-review-body">
+      {choosingAlternative ? <AlternativeReview assessmentId={assessmentId} recommendation={recommendation} onExpired={onExpired} /> : <>
+        <section aria-label="Selected Suggestion"><h3>{recommendation.title}</h3><span className="testing-recommendation-status"><img src={clock} alt="" />Pending Review</span></section>
+        <section aria-label="Suggestion Information"><h3>Suggestion Information</h3><SuggestionFields recommendation={recommendation} /></section>
+        <section><h3>Why Is This Suggested?</h3><p>{recommendation.reason}</p></section>
+        <section aria-label="Source Test"><h3>Source Test</h3><dl className="testing-review-fields testing-three-fields">
+          <div><dt>Test</dt><dd>{recommendation.source_test?.test_name ?? 'Not available'}</dd></div>
+          <div><dt>Tool</dt><dd>{recommendation.source_test?.tool ?? 'Not available'}</dd></div>
+          <div><dt>Status</dt><dd>{recommendation.source_test
+            ? <span className="testing-state testing-status-badge" data-status={recommendation.source_test.status}>{recommendation.source_test.status}</span> : 'Not available'}</dd></div>
+        </dl></section>
+        <section aria-label="Proposed Test"><h3>Proposed Test</h3><p>No executable follow-up test is currently supported for this observation.</p></section>
       </>}
+    </div>
+    <footer className="testing-review-footer">{choosingAlternative ? <>
+      <button type="button" onClick={() => setChoosingAlternative(false)}>Cancel</button>
+      <button type="button" disabled>Confirm Alternative</button>
+    </> : <><button type="button" onClick={onClose}>Close</button><button type="button" disabled>Start Test</button>
+      <button type="button" onClick={() => setChoosingAlternative(true)}>Choose Alternative</button></>}
     </footer>
   </dialog>
 }
@@ -318,6 +340,7 @@ function TestingAssessment({ assessmentId, onExpired }: TestingPageProps) {
             : <><p>Recommendations are based on the information currently available.</p><StatusMessage data={data} /></>}</div></section>
         <section className="analyst-card testing-recommendations" aria-label="Recommendations">
           <h2>Recommendations</h2>
+          <p>Review recommended testing actions before deciding whether to proceed.</p>
           {recommendationError && <div role="alert"><p>{recommendationError}</p>
             <button type="button" className="analyst-link" onClick={() => setRecommendationRetry(n => n + 1)}>Retry recommendations</button></div>}
           {!recommendations && !recommendationError && <p role="status">Loading recommendations…</p>}
@@ -328,11 +351,11 @@ function TestingAssessment({ assessmentId, onExpired }: TestingPageProps) {
           </div>}
           {recommendations && recommendations.count > 0 && <div className="testing-recommendation-list">
             {recommendations.recommendations.map(item => <article className="testing-recommendation-item" key={item.id}>
-              <div className="testing-recommendation-title"><h3>{item.title}</h3><span className="testing-recommendation-status">Review required</span></div>
-              <p><strong>Target:</strong> {item.target}</p>
-              <h4>Why this action is suggested</h4><p>{item.reason}</p>
-              <p className="testing-secondary">This suggestion is for analyst review only. No follow-up test has been authorized or scheduled.</p>
-              <button type="button" className="analyst-link" onClick={event => { event.currentTarget.focus(); setReviewedRecommendation(item.id) }}>Review Suggestion</button>
+              <div className="testing-recommendation-title"><h3>{item.title}</h3><span className="testing-recommendation-status"><img src={clock} alt="" />Pending Review</span></div>
+              <SuggestionFields recommendation={item} />
+              <p className="testing-recommendation-reason">{item.reason}</p>
+
+              <button type="button" className="analyst-create testing-review-action" onClick={event => { event.currentTarget.focus(); setReviewedRecommendation(item.id) }}>Review Suggestion</button>
             </article>)}
           </div>}
         </section>
@@ -394,7 +417,7 @@ function TestingAssessment({ assessmentId, onExpired }: TestingPageProps) {
       </>}
       </>}
     </div>}
-    {reviewedRecommendation && recommendations?.recommendations.some(item => item.id === reviewedRecommendation) && <RecommendationReview
+    {reviewedRecommendation && recommendations?.recommendations.some(item => item.id === reviewedRecommendation) && <RecommendationReview assessmentId={assessmentId} onExpired={onExpired}
       recommendation={recommendations.recommendations.find(item => item.id === reviewedRecommendation)!}
       onClose={() => setReviewedRecommendation(undefined)} />}
     {selected && <Details key={selected} assessmentId={assessmentId} executionId={selected} onExpired={onExpired}

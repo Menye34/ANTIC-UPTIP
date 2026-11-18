@@ -22,3 +22,14 @@ export function executionDetails(): ExecutionDetails {
   return { ...testingData(['Queued']).executions[0], dispatch_status: 'requires_fresh_authorization',
     attempts: [], evidence: [], processing: [], observations: [], events: [] }
 }
+
+export function recommendationData() {
+  return { assessment_id: assessmentId, count: 1, execution_authorized: false as const,
+    recommendations: [{ id: 'a'.repeat(64), kind: 'review_host_discovery' as const,
+      title: 'Review responding host', target_id: 'synthetic-target-0', target: '192.0.2.1',
+      service: null, port: null, reason: 'A completed discovery observation recorded this host as responding.',
+      source_observation_id: 'synthetic-observation', source_evidence_id: 'synthetic-evidence',
+      execution_available: false as const, execution_status: 'not_supported' as const,
+      suggested_test: null, suggested_tool: null,
+      source_test: { test_name: 'Network Discovery', tool: 'Nmap', status: 'Completed' as const } }] }
+}

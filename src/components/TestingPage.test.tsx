@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import TestingPage from './TestingPage'
 import type { ExecutionStatus } from '../services/testing'
-import { assessmentId, executionDetails, testingData } from '../test-fixtures/testing'
+import { assessmentId, executionDetails, recommendationData, testingData } from '../test-fixtures/testing'
 
 const reply = (value: unknown, status = 200) => ({ ok: status < 400, status, json: async () => value })
 const expired = vi.fn()
@@ -89,8 +89,14 @@ it('loads functional read-only details without issuing an execution write', asyn
   const button = await screen.findByRole('button', { name: /View Details:/ })
   fireEvent.click(button)
   const dialog = await screen.findByRole('dialog')
+  const technical = within(dialog).getByText('Technical Details').closest('details')!
+  expect(technical.open).toBe(false)
+  fireEvent.click(within(dialog).getByText('Technical Details'))
   expect(await within(dialog).findByText(/No execution attempt recorded/)).toBeVisible()
-  expect(within(dialog).getByText('No scanner evidence recorded.')).toBeVisible()
+  const output = within(dialog).getByText('Original Tool Output').closest('details')!
+  expect(output.open).toBe(false)
+  fireEvent.click(within(dialog).getByText('Original Tool Output'))
+  expect(await within(dialog).findByText('No scanner evidence recorded.')).toBeVisible()
   fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(button).toHaveFocus()
@@ -139,11 +145,14 @@ it.each(['Running', 'Completed', 'Failed'] as ExecutionStatus[])(
     page()
     fireEvent.click(await screen.findByRole('button', { name: /View Details:/ }))
     const dialog = await screen.findByRole('dialog')
-    expect(await within(dialog).findByRole('heading', { name: status === 'Running'
-      ? 'Running Test Details' : status === 'Completed' ? 'Completed Test Details' : 'Failed Test Details' })).toBeVisible()
+    expect(await within(dialog).findByRole('heading', { name: 'Test Details' })).toBeVisible()
+    expect(await within(dialog).findByRole('region', { name: 'Selected Test' })).toHaveTextContent(status)
     expect(within(dialog).getByText('Technical Details')).toBeVisible()
-    expect(within(dialog).getByRole('region', { name: 'Test results' })).toBeVisible()
-    if (status === 'Failed') expect(within(dialog).getByText('scanner_error')).toBeVisible()
+    expect(within(dialog).getByRole('region', { name: 'Test Results' })).toBeVisible()
+    if (status === 'Failed') {
+      fireEvent.click(within(dialog).getByText('Technical Details'))
+      expect(within(dialog).getByText('scanner error')).toBeVisible()
+    }
     expect(fetcher.mock.calls.every(([, options]) => !(options as RequestInit | undefined)?.method)).toBe(true)
   })
 
@@ -200,15 +209,21 @@ it('renders only API-provided T-04B recommendations and provenance without start
   const trigger = screen.getByRole('button', { name: 'Review Suggestion' })
   fireEvent.click(trigger)
   const drawer = screen.getByRole('dialog', { name: 'Review Recommendation' })
-  expect(within(drawer).getByText('observation-1')).toBeVisible()
-  expect(within(drawer).getByText('evidence-1')).toBeVisible()
+  expect(within(drawer).queryByText('observation-1')).not.toBeInTheDocument()
+  expect(within(drawer).queryByText('evidence-1')).not.toBeInTheDocument()
+  for (const heading of ['Suggestion Information', 'Why Is This Suggested?', 'Source Test', 'Proposed Test']) {
+    expect(within(drawer).getByRole('heading', { name: heading })).toBeVisible()
+  }
   expect(within(drawer).getByRole('button', { name: 'Start Test' })).toBeDisabled()
   fireEvent.click(within(drawer).getByRole('button', { name: 'Choose Alternative' }))
   expect(within(drawer).getByRole('heading', { name: 'Choose Alternative' })).toBeVisible()
   expect(within(drawer).getByLabelText('Security Tool')).toBeDisabled()
   expect(within(drawer).getByLabelText('Test Profile')).toBeDisabled()
   expect(within(drawer).getByRole('button', { name: 'Confirm Alternative' })).toBeDisabled()
-  expect(within(drawer).getByText(/No authorized alternative is currently available/)).toBeVisible()
+  for (const heading of ['Current Recommendation', 'Select Alternative', 'Selected Test', 'Compatibility Status']) {
+    expect(within(drawer).getByRole('heading', { name: heading })).toBeVisible()
+  }
+  expect(await within(drawer).findByText('Unable to verify alternatives. No test can be confirmed.')).toBeVisible()
   fireEvent.click(within(drawer).getByRole('button', { name: 'Cancel' }))
   expect(within(drawer).getByRole('heading', { name: 'Review Recommendation' })).toBeVisible()
   fireEvent.click(within(drawer).getByRole('button', { name: 'Close recommendation review' }))
@@ -239,4 +254,103 @@ it('clears previous assessment content immediately when the assessment changes',
   expect(screen.getByRole('status')).toHaveTextContent('Loading Testing')
   expect(screen.queryByRole('table')).not.toBeInTheDocument()
   expect(screen.queryByText('192.0.2.1')).not.toBeInTheDocument()
+})
+
+it('shows verified source metadata and fail-closed alternative checks without exposing identifiers', async () => {
+  const recs = recommendationData()
+  const check = { assessment_id: assessmentId, recommendation_id: recs.recommendations[0].id,
+    eligible: false, execution_available: false, authorization_available: false,
+    available_profiles: [], reason_code: 'followup_profile_not_supported' }
+  const fetcher = vi.fn<(input: RequestInfo | URL, options?: RequestInit) => Promise<ReturnType<typeof reply>>>(async input => {
+    const url = String(input)
+    return reply(url.endsWith('/recommendations') ? recs
+      : url.endsWith('/eligibility') || url.endsWith('/authorization-review') ? check : testingData(['Completed']))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  page()
+  await screen.findByRole('table')
+  fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Review Suggestion' }))
+  const drawer = screen.getByRole('dialog')
+  const source = within(drawer).getByRole('region', { name: 'Source Test' })
+  expect(source).toHaveTextContent('Network Discovery')
+  expect(source).toHaveTextContent('Nmap')
+  expect(source).toHaveTextContent('Completed')
+  expect(within(drawer).getAllByText('Not identified')).toHaveLength(2)
+  expect(screen.queryByText('synthetic-observation')).not.toBeInTheDocument()
+  expect(screen.queryByText('synthetic-evidence')).not.toBeInTheDocument()
+  expect(within(drawer).getByRole('button', { name: 'Start Test' })).toBeDisabled()
+  fireEvent.click(within(drawer).getByRole('button', { name: 'Choose Alternative' }))
+  expect(await within(drawer).findByText('No supported follow-up test profile is available for this recommendation.')).toBeVisible()
+  expect(within(drawer).getByRole('button', { name: 'Confirm Alternative' })).toBeDisabled()
+  expect(within(drawer).getByLabelText('Security Tool')).toHaveLength(1)
+  expect(within(drawer).getByLabelText('Test Profile')).toHaveLength(1)
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/eligibility'))).toBe(true)
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/authorization-review'))).toBe(true)
+  expect(fetcher.mock.calls.every(([, options]) => !options?.method)).toBe(true)
+})
+
+it.each([false, true])('loads original output only on disclosure and handles unavailable=%s', async unavailable => {
+  const details = executionDetails()
+  details.status = 'Completed'
+  details.observations = [{ id: 'synthetic-observation', type: 'host_discovery',
+    data: { address: '192.0.2.1', status: 'up' }, partial: false, evidence_id: 'synthetic-evidence' }]
+  details.evidence = [{ id: 'synthetic-evidence', format: 'nmap-xml', size_bytes: 25,
+    partial: false, collected_at: '2026-11-16T10:00:00Z', sha256: 'a'.repeat(64) }]
+  const raw = '<script>inert text</script>'
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/output')) return reply(unavailable ? {} : {
+      assessment_id: assessmentId, execution_id: details.id, evidence_id: 'synthetic-evidence',
+      content: raw, format: 'nmap-xml', partial: false,
+    }, unavailable ? 409 : 200)
+    return reply(url.endsWith('/synthetic-execution-0') ? details : testingData(['Completed']))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  page()
+  fireEvent.click(await screen.findByRole('button', { name: /View Details:/ }))
+  const drawer = screen.getByRole('dialog')
+  expect(await within(drawer).findByRole('table')).toHaveTextContent('192.0.2.1')
+  expect(within(drawer).getByRole('table')).toHaveTextContent('Responding')
+  expect(within(drawer).queryByText('HTTP')).not.toBeInTheDocument()
+  const output = within(drawer).getByText('Original Tool Output')
+  expect(output.closest('details')!.open).toBe(false)
+  expect(within(drawer).getByText('Technical Details').closest('details')!.open).toBe(false)
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/output'))).toBe(false)
+  fireEvent.click(output)
+  if (unavailable) expect(await within(drawer).findByRole('alert')).toHaveTextContent('Original tool output is unavailable.')
+  else {
+    expect(await within(drawer).findByText(raw)).toBeVisible()
+    expect(drawer.querySelector('script')).toBeNull()
+  }
+  fireEvent.click(output)
+  expect(output.closest('details')!.open).toBe(false)
+})
+
+it('rejects malformed alternative authorization responses instead of enabling confirmation', async () => {
+  const recs = recommendationData()
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    return reply(url.endsWith('/recommendations') ? recs
+      : url.includes('/recommendations/') ? { assessment_id: assessmentId, eligible: true, execution_available: true }
+      : testingData(['Completed']))
+  }))
+  page()
+  await screen.findByRole('table')
+  fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Review Suggestion' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Choose Alternative' }))
+  expect(await screen.findByText('Unable to verify alternatives. No test can be confirmed.')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Confirm Alternative' })).toBeDisabled()
+})
+
+it.each([401, 403, 404])('does not convert recommendation access failure %s into an empty list', async status => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) =>
+    String(input).endsWith('/recommendations') ? reply({}, status) : reply(testingData(['Completed']))))
+  page()
+  await screen.findByRole('table')
+  fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(status === 401 ? 'session has ended' : 'Recommendations unavailable')
+  expect(screen.queryByText('No suggested next steps yet')).not.toBeInTheDocument()
+  expect(expired).toHaveBeenCalledTimes(status === 401 ? 1 : 0)
 })

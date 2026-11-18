@@ -221,6 +221,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
     from app.main import create_app
     name='uptip_test_schedule_'+uuid4().hex
     import subprocess
+    import os
 
     helper = Path('/usr/local/lib/uptip-test/scheduling_db_admin.py')
 
@@ -232,8 +233,15 @@ def scheduling_concurrency(engine,monkeypatch,request):
             timeout=30,
         )
 
+    direct_admin = os.environ.get('UPTIP_DISPOSABLE_ADMIN_URL')
+    if direct_admin:
+        from disposable_postgres import scheduling_database
+        administer, direct_owner, direct_runtime = scheduling_database(
+            name, direct_admin, os.environ.get('UPTIP_MIGRATION_DATABASE_URL', ''),
+            os.environ.get('UPTIP_DATABASE_URL', ''), engine.url,
+        )
     administer('create')
-    dedicated=create_engine(engine.url.set(database=name))
+    dedicated=create_engine(direct_runtime if direct_admin else engine.url.set(database=name))
     settings=get_settings()
     try:
         with dedicated.connect() as c:
@@ -243,13 +251,14 @@ def scheduling_concurrency(engine,monkeypatch,request):
         from dotenv import dotenv_values
         from sqlalchemy.engine import make_url
 
-        migration_raw = dotenv_values(".env").get("UPTIP_MIGRATION_DATABASE_URL")
+        migration_raw = (direct_owner.render_as_string(hide_password=False) if direct_admin
+                         else dotenv_values(".env").get("UPTIP_MIGRATION_DATABASE_URL"))
         if not migration_raw:
             raise RuntimeError("Missing test migration database configuration")
 
         migration_url = make_url(migration_raw)
 
-        if not (
+        if not direct_admin and not (
             migration_url.drivername == "postgresql+psycopg"
             and migration_url.username == "uptip"
             and migration_url.database == "uptip"

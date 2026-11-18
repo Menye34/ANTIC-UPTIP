@@ -70,7 +70,17 @@ export async function getExecutionDetails(assessmentId: string, executionId: str
   const result = await startRequest<ExecutionDetails>(assessmentId, '/testing/executions/' + encodeURIComponent(executionId), signal)
   if (!validExecution(result) || result.id !== executionId || !Array.isArray(result.attempts)
       || !Array.isArray(result.evidence) || !Array.isArray(result.processing) || !Array.isArray(result.observations)
-      || !Array.isArray(result.events)) throw new Error('Invalid execution details')
+      || !Array.isArray(result.events)
+      || result.evidence.some(row => !row || typeof row.id !== 'string' || typeof row.format !== 'string'
+        || !Number.isInteger(row.size_bytes) || row.size_bytes < 0 || typeof row.partial !== 'boolean'
+        || typeof row.collected_at !== 'string' || typeof row.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(row.sha256))
+      || result.observations.some(row => !row || typeof row.id !== 'string' || typeof row.type !== 'string'
+        || !row.data || typeof row.data !== 'object' || Array.isArray(row.data) || typeof row.partial !== 'boolean')
+      || result.attempts.some(row => !row || typeof row.id !== 'string' || typeof row.status !== 'string'
+        || !Number.isInteger(row.attempt_number) || row.attempt_number < 1)
+      || result.processing.some(row => !row || typeof row.id !== 'string' || typeof row.status !== 'string'
+        || !Number.isInteger(row.observation_count) || row.observation_count < 0 || typeof row.partial !== 'boolean')
+    ) throw new Error('Invalid execution details')
   return result
 }
 
@@ -89,6 +99,7 @@ export interface Recommendation {
   execution_status: 'not_supported'
   suggested_test: null
   suggested_tool: null
+  source_test?: { test_name: string; tool: string; status: ExecutionStatus } | null
 }
 export interface RecommendationData {
   assessment_id: string
@@ -108,8 +119,40 @@ export async function getRecommendations(assessmentId: string, signal: AbortSign
       || typeof row.reason !== 'string' || typeof row.source_observation_id !== 'string'
       || typeof row.source_evidence_id !== 'string' || row.execution_available !== false
       || row.execution_status !== 'not_supported' || row.suggested_test !== null
-      || row.suggested_tool !== null || row.port !== null || row.service !== null)) {
+      || row.suggested_tool !== null || row.port !== null || row.service !== null
+      || (row.source_test != null && (typeof row.source_test.test_name !== 'string'
+        || typeof row.source_test.tool !== 'string' || !executionStates.includes(row.source_test.status))))) {
     throw new Error('Invalid recommendations response')
   }
+  return result
+}
+
+export interface RecommendationCheck {
+  assessment_id: string
+  recommendation_id: string
+  eligible: false
+  execution_available: false
+  authorization_available: false
+  available_profiles: []
+  reason_code: string
+}
+export async function getRecommendationCheck(assessmentId: string, recommendationId: string,
+  kind: 'eligibility' | 'authorization-review', signal: AbortSignal) {
+  const result = await startRequest<RecommendationCheck>(assessmentId,
+    '/testing/recommendations/' + encodeURIComponent(recommendationId) + '/' + kind, signal)
+  if (result.assessment_id !== assessmentId || result.recommendation_id !== recommendationId
+      || result.eligible !== false || result.execution_available !== false || result.authorization_available !== false
+      || !Array.isArray(result.available_profiles) || result.available_profiles.length !== 0
+      || typeof result.reason_code !== 'string') throw new Error('Invalid recommendation review')
+  return result
+}
+
+export async function getOriginalOutput(assessmentId: string, executionId: string, evidenceId: string, signal: AbortSignal) {
+  const result = await startRequest<{ assessment_id: string; execution_id: string; evidence_id: string;
+    content: string; format: string; partial: boolean }>(assessmentId,
+    '/testing/executions/' + encodeURIComponent(executionId) + '/evidence/' + encodeURIComponent(evidenceId) + '/output', signal)
+  if (result.assessment_id !== assessmentId || result.execution_id !== executionId || result.evidence_id !== evidenceId
+    || typeof result.content !== 'string' || new TextEncoder().encode(result.content).length > 10 * 1024 * 1024
+    || typeof result.format !== 'string' || typeof result.partial !== 'boolean') throw new Error('Invalid original output')
   return result
 }

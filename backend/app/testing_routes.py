@@ -2,7 +2,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from .assessment_routes import accessible, analyst
@@ -160,6 +160,25 @@ def list_recommendations(assessment_id: UUID, user: User = Depends(analyst),
         SecurityObservation.assessment_id == assessment_id,
     ).order_by(SecurityObservation.collected_at, SecurityObservation.id)).all()
     recommendations = plan_recommendations(observations)
+    # One joined read, not a query per card. Bind every source relation to the
+    # current assessment and the same execution/attempt/target evidence chain.
+    sources = db.execute(select(SecurityObservation.id, BaselineExecutionRequest)
+        .join(ScannerEvidence, and_(
+            ScannerEvidence.id == SecurityObservation.evidence_id,
+            ScannerEvidence.request_id == SecurityObservation.request_id,
+            ScannerEvidence.attempt_id == SecurityObservation.attempt_id,
+            ScannerEvidence.target_id == SecurityObservation.target_id,
+            ScannerEvidence.assessment_id == assessment_id))
+        .join(BaselineExecutionRequest, and_(
+            BaselineExecutionRequest.id == SecurityObservation.request_id,
+            BaselineExecutionRequest.assessment_id == assessment_id,
+            BaselineExecutionRequest.target_id == SecurityObservation.target_id))
+        .where(SecurityObservation.assessment_id == assessment_id)).all()
+    source_by_id = {identifier: request for identifier, request in sources}
+    for item in recommendations:
+        source = source_by_id.get(item['source_observation_id'])
+        item['source_test'] = ({'test_name': source.activity, 'tool': source.tool,
+                                'status': source.status} if source is not None else None)
     return {
         'assessment_id': assessment_id,
         'count': len(recommendations),
@@ -199,3 +218,33 @@ def recommendation_authorization_review(assessment_id: UUID, recommendation_id: 
     if result['reason_code'] == 'recommendation_not_current':
         raise HTTPException(404, detail='Recommendation unavailable')
     return {'assessment_id': assessment_id, **result}
+
+
+@router.get('/executions/{execution_id}/evidence/{evidence_id}/output')
+def evidence_output(assessment_id: UUID, execution_id: UUID, evidence_id: UUID,
+                    user: User = Depends(analyst), db: Session = Depends(get_db)):
+    """Bounded read-only output, never paths, HTML responses or execution."""
+    from .config import get_settings
+    from .evidence_reading import EvidenceUnavailable, original_output
+
+    assessment_for(db, assessment_id, user)
+    source = db.scalar(select(ScannerEvidence).join(ExecutionAttempt, and_(
+        ExecutionAttempt.id == ScannerEvidence.attempt_id,
+        ExecutionAttempt.request_id == ScannerEvidence.request_id,
+        ExecutionAttempt.assessment_id == ScannerEvidence.assessment_id,
+        ExecutionAttempt.target_id == ScannerEvidence.target_id,
+    )).join(BaselineExecutionRequest, and_(
+        BaselineExecutionRequest.id == ScannerEvidence.request_id,
+        BaselineExecutionRequest.assessment_id == ScannerEvidence.assessment_id,
+        BaselineExecutionRequest.target_id == ScannerEvidence.target_id,
+    )).where(ScannerEvidence.id == evidence_id, ScannerEvidence.request_id == execution_id,
+             ScannerEvidence.assessment_id == assessment_id))
+    if source is None:
+        raise HTTPException(404)
+    try:
+        content = original_output(source, get_settings().evidence_read_directory)
+    except (EvidenceUnavailable, OSError):
+        raise HTTPException(409, detail='Original tool output is unavailable.') from None
+    return {'assessment_id': assessment_id, 'execution_id': execution_id,
+            'evidence_id': evidence_id, 'content': content, 'format': source.format,
+            'partial': source.is_partial}
