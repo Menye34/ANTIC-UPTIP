@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/testing-backend-regressions
+      - feat/phase3-testing-stabilization
   pull_request:
     paths:
       - 'backend/**'
@@ -88,4 +89,12 @@ jobs:
             tests/test_baseline_scheduling.py \
             tests/test_execution_orchestration.py \
             tests/test_execution_persistence.py \
+            tests/test_assessment_readiness.py \
+            tests/test_assessment_start.py \
+            tests/test_authorization_records.py \
+            tests/test_system_authorization_issuer.py \
+            tests/test_system_authorization_persistence.py \
+            tests/test_system_authorization_verifier.py \
+            tests/test_nmap_dispatch_authorization.py \
+            tests/test_nmap_plan_revalidation.py \
             -q --tb=short
