@@ -173,3 +173,21 @@
   .testing-completion-check { grid-template-columns: minmax(0,1fr) auto; gap: 12px; }
   .testing-completion-check .analyst-link { grid-column: 1 / -1; justify-self: start; }
 }
+
+
+/* TC-02/03/04: ready, confirmation and completed presentation. */
+.testing-completion-status { color: #475569; background: #f1f5f9; }
+.testing-completion-check:has(.testing-completion-status) { min-width: 0; }
+.testing-completion-decisions { padding: 16px 0; border-bottom: 1px solid #e2e8f0; }
+.testing-completion-decisions h3 { font-size: 15px; margin-bottom: 8px; }
+.testing-completion-decisions p { font-size: 13px; color: #64748b; margin-bottom: 12px; }
+.testing-completion-decision { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid #e2e8f0; }
+.testing-completion-decision span { flex: 1; min-width: 180px; font-size: 13px; }
+.testing-completion-decision button { border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 12px; background: white; cursor: pointer; }
+.testing-completion-decision button:disabled { opacity: .5; cursor: not-allowed; }
+.testing-completion-dialog { position: fixed; margin: auto; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; color: #1e293b; box-shadow: 0 20px 60px rgb(15 23 42 / .2); }
+.testing-completion-dialog::backdrop { background: rgb(15 23 42 / .5); }
+.testing-completion-dialog:not([open]) { display: none; }
+.testing-completion-dialog h2 { font-size: 20px; margin-bottom: 12px; }
+.testing-completion-dialog p, .testing-completion-dialog li { font-size: 14px; line-height: 1.6; color: #475569; }
+.testing-completion-dialog ul { margin: 16px 0 24px; padding-left: 20px; }
