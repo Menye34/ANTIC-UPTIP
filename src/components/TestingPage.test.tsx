@@ -153,7 +153,10 @@ it('shows actual execution events with friendly labels and timestamps', async ()
 })
 
 it('switches to T-04A Recommendations and back without writing or inventing suggestions', async () => {
-  const fetcher = vi.fn(async (_input: RequestInfo | URL, _options?: RequestInit) => reply(testingData(['Completed'])))
+  const fetcher = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => reply(
+    String(input).endsWith('/recommendations')
+      ? { assessment_id: assessmentId, count: 0, recommendations: [], execution_authorized: false }
+      : testingData(['Completed'])))
   vi.stubGlobal('fetch', fetcher)
   page()
   const activity = await screen.findByRole('table', { name: 'Test Activity' })
@@ -161,7 +164,7 @@ it('switches to T-04A Recommendations and back without writing or inventing sugg
   fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
   expect(screen.getByRole('tab', { name: /Recommendations/ })).toHaveAttribute('aria-selected', 'true')
   expect(screen.getByRole('tabpanel', { name: /Recommendations/ })).toBeVisible()
-  expect(screen.getByText('No suggested next steps yet')).toBeVisible()
+  expect(await screen.findByText('No suggested next steps yet')).toBeVisible()
   expect(screen.getByLabelText('0 recommendations')).toBeVisible()
   expect(screen.queryByRole('table', { name: 'Test Activity' })).not.toBeInTheDocument()
   expect(screen.getByRole('tab', { name: 'Testing Completion' })).toBeDisabled()
@@ -169,4 +172,40 @@ it('switches to T-04A Recommendations and back without writing or inventing sugg
   fireEvent.click(screen.getByRole('tab', { name: 'Test Activity' }))
   expect(screen.getByRole('table', { name: 'Test Activity' })).toBeVisible()
   expect(fetcher.mock.calls.every(([, options]) => !(options as RequestInit | undefined)?.method)).toBe(true)
+})
+
+it('renders only API-provided T-04B recommendations and provenance without starting tests', async () => {
+  const item = {
+    id: 'stable-recommendation', kind: 'review_host_discovery', title: 'Review responding host',
+    target_id: 'target-1', target: '192.0.2.10', service: null, port: null,
+    reason: 'A completed discovery observation recorded this host as responding.',
+    source_observation_id: 'observation-1', source_evidence_id: 'evidence-1',
+    execution_available: false, execution_status: 'not_supported', suggested_test: null, suggested_tool: null,
+  }
+  const fetcher = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => reply(
+    String(input).endsWith('/recommendations')
+      ? { assessment_id: assessmentId, count: 1, recommendations: [item], execution_authorized: false }
+      : testingData(['Completed'])))
+  vi.stubGlobal('fetch', fetcher)
+  page()
+  await screen.findByRole('table', { name: 'Test Activity' })
+  fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
+  expect(await screen.findByText('Review responding host')).toBeVisible()
+  expect(screen.getByLabelText('1 recommendations')).toBeVisible()
+  expect(screen.getByText('192.0.2.10')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Review Suggestion' }))
+  expect(screen.getByText('observation-1')).toBeVisible()
+  expect(screen.getByText('evidence-1')).toBeVisible()
+  expect(screen.queryByRole('button', { name: 'Start Test' })).not.toBeInTheDocument()
+  expect(fetcher.mock.calls.every(([, options]) => !(options as RequestInit | undefined)?.method)).toBe(true)
+})
+
+it('does not display a fabricated empty state when recommendations fail', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/recommendations')
+    ? reply({}, 503) : reply(testingData(['Completed']))))
+  page()
+  await screen.findByRole('table')
+  fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
+  expect(await screen.findByText(/Unable to load recommendations/)).toBeVisible()
+  expect(screen.queryByText('No suggested next steps yet')).not.toBeInTheDocument()
 })
