@@ -237,13 +237,13 @@ function RecommendationReview({ assessmentId, recommendation, onClose, onExpired
   </dialog>
 }
 
-type TestingPageProps = { assessmentId: string; onExpired: () => void; csrfToken: string }
+type TestingPageProps = { assessmentId: string; onExpired: () => void; csrfToken?: string }
 
 export default function TestingPage(props: TestingPageProps) {
   return <TestingAssessment key={props.assessmentId} {...props} />
 }
 
-function TestingAssessment({ assessmentId, onExpired, csrfToken }: TestingPageProps) {
+function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingPageProps) {
   const [data, setData] = useState<TestingData>()
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
