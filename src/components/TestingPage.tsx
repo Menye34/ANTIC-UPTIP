@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AssessmentStartError } from '../services/assessmentStart'
 import { getExecutionDetails, getRecommendations, getTesting } from '../services/testing'
-import type { ExecutionDetails, RecommendationData, TestingData } from '../services/testing'
+import type { ExecutionDetails, Recommendation, RecommendationData, TestingData } from '../services/testing'
 import plus from '../assets/testing/Plus.svg'
 import information from '../assets/testing/Information.svg'
 import marker from '../assets/testing/Marker.svg'
@@ -144,6 +144,47 @@ function eventLabel(event: string) {
   return eventNames[event] ?? event.replace(/_/g, ' ')
 }
 
+
+function RecommendationReview({ recommendation, onClose }: { recommendation: Recommendation; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const closeButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    dialog.current?.showModal()
+    closeButton.current?.focus()
+    return () => { dialog.current?.close(); previouslyFocused?.focus() }
+  }, [])
+  return <dialog ref={dialog} className="testing-review-dialog" aria-labelledby="recommendation-review-title"
+    onCancel={event => { event.preventDefault(); onClose() }}>
+    <div className="testing-review-header">
+      <h2 id="recommendation-review-title">Review Recommendation</h2>
+      <button ref={closeButton} type="button" aria-label="Close recommendation review" onClick={onClose}>×</button>
+    </div>
+    <div className="testing-review-body">
+      <h3>{recommendation.title}</h3>
+      <dl className="testing-review-fields">
+        <div><dt>Target</dt><dd>{recommendation.target}</dd></div>
+        <div><dt>Service</dt><dd>Not identified</dd></div>
+        <div><dt>Port</dt><dd>Not identified</dd></div>
+      </dl>
+      <section><h4>Why this action is suggested</h4><p>{recommendation.reason}</p></section>
+      <section><h4>Suggested test</h4><p>No executable follow-up test is supported for this observation.</p></section>
+      <section><h4>Supporting evidence</h4>
+        <dl className="testing-review-fields">
+          <div><dt>Observation ID</dt><dd>{recommendation.source_observation_id}</dd></div>
+          <div><dt>Evidence ID</dt><dd>{recommendation.source_evidence_id}</dd></div>
+        </dl>
+      </section>
+      <p className="testing-review-safety">Analyst review only. Reviewing this recommendation does not authorize or schedule a security test.</p>
+    </div>
+    <footer className="testing-review-footer">
+      <button type="button" onClick={onClose}>Close</button>
+      <button type="button" disabled title="No authorized executable test is available">Start Test</button>
+      <button type="button" disabled title="Alternative test profiles are not yet available">Choose Alternative</button>
+    </footer>
+  </dialog>
+}
+
 export default function TestingPage({ assessmentId, onExpired }: { assessmentId: string; onExpired: () => void }) {
   const [data, setData] = useState<TestingData>()
   const [error, setError] = useState('')
@@ -261,15 +302,7 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
               <p><strong>Target:</strong> {item.target}</p>
               <h4>Why this action is suggested</h4><p>{item.reason}</p>
               <p className="testing-secondary">This suggestion is for analyst review only. No follow-up test has been authorized or scheduled.</p>
-              <button type="button" className="analyst-link" onClick={() => setReviewedRecommendation(
-                reviewedRecommendation === item.id ? undefined : item.id
-              )}>{reviewedRecommendation === item.id ? 'Close Review' : 'Review Suggestion'}</button>
-              {reviewedRecommendation === item.id && <div className="testing-recommendation-review">
-                <h4>Observation provenance</h4>
-                <dl className="testing-metadata"><div><dt>Observation ID</dt><dd>{item.source_observation_id}</dd></div>
-                  <div><dt>Evidence ID</dt><dd>{item.source_evidence_id}</dd></div>
-                  <div><dt>Execution eligibility</dt><dd>Not supported — no test can be started from this suggestion.</dd></div></dl>
-              </div>}
+              <button type="button" className="analyst-link" onClick={() => setReviewedRecommendation(item.id)}>Review Suggestion</button>
             </article>)}
           </div>}
         </section>
@@ -331,6 +364,9 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
       </>}
       </>}
     </div>}
+    {reviewedRecommendation && recommendations?.recommendations.some(item => item.id === reviewedRecommendation) && <RecommendationReview
+      recommendation={recommendations.recommendations.find(item => item.id === reviewedRecommendation)!}
+      onClose={() => setReviewedRecommendation(undefined)} />}
     {selected && <Details key={selected} assessmentId={assessmentId} executionId={selected} onExpired={onExpired}
       onClose={() => { setSelected(undefined); detailButton.current?.focus() }} />}
   </>
