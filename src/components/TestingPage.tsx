@@ -198,7 +198,7 @@ function RecommendationReview({ recommendation, onClose }: { recommendation: Rec
         </dl>
       </section>
       <p className="testing-review-safety">Analyst review only. Reviewing this recommendation does not authorize or schedule a security test.</p>
-    </div>
+    </div>}
     <footer className="testing-review-footer">
       {choosingAlternative ? <>
         <button type="button" onClick={() => setChoosingAlternative(false)}>Cancel</button>
