@@ -379,3 +379,41 @@ it('opens Testing Completion inside the existing Testing tab and blocks incomple
   fireEvent.click(screen.getByRole('button', { name: 'View Tests' }))
   expect(screen.getByRole('table', { name: 'Test Activity' })).toBeVisible()
 })
+
+
+it('shows ready confirmation and persisted completion without faking a Findings route', async () => {
+  const counts = { Queued: 0, Running: 0, Completed: 1, Failed: 0, Stopped: 0, Blocked: 0, Cancelled: 0 }
+  const summary = {
+    total: 1, counts, active_attempts: 0, processing_errors: 0,
+    processing_pending: 0, missing_processing: 0, recommendation_count: 0,
+    pending_recommendation_ids: [], reviewed_recommendations: 0,
+    candidate_findings: null, blockers: [],
+  }
+  let done = false
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
+    const url = String(input)
+    if (url.endsWith('/testing/completion')) {
+      if (options?.method === 'POST') {
+        done = true
+      }
+      return reply({
+        assessment_id: assessmentId, lifecycle_status: done ? 'Finding Review' : 'Testing',
+        ready: !done, snapshot_digest: 'b'.repeat(64), summary,
+        recommendations: [], completion: done ? {
+          completed_at: '2026-11-18T10:00:00Z', actor_id: 'synthetic-analyst', snapshot: summary,
+        } : null,
+      })
+    }
+    return reply(testingData(['Completed']))
+  }))
+  render(<TestingPage assessmentId={assessmentId} onExpired={expired} csrfToken="synthetic-csrf" />)
+  await screen.findByRole('table', { name: 'Test Activity' })
+  fireEvent.click(screen.getByRole('tab', { name: 'Testing Completion' }))
+  expect(await screen.findByRole('heading', { name: 'Ready to complete' })).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Complete Testing' }))
+  expect(await screen.findByRole('heading', { name: 'Complete testing?' })).toBeVisible()
+  const dialog = screen.getByRole('dialog')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Complete Testing' }))
+  expect(await screen.findByRole('heading', { name: 'Testing Completed' })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeDisabled()
+})
