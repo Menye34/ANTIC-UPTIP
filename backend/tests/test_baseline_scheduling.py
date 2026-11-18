@@ -208,7 +208,7 @@ def test_overview_keeps_one_snapshot_during_start(v3_scheduling_concurrency):
     """A concurrent Start cannot mix Draft overview data with Testing queue counts."""
     from fastapi.testclient import TestClient
 
-    app, factory, (path, headers, _), review_data, cookies = scheduling_concurrency
+    app, factory, (path, headers, _), review_data, cookies = v3_scheduling_concurrency
     engine = factory.kw['bind']
     assert review_data['schema_version'] == 3
     assert review_data['confirmation_possible']
