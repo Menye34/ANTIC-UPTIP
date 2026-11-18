@@ -62,18 +62,27 @@ def readiness(db, assessment, *, lock=False):
     rows = db.scalars(executions).all()
     statuses = {name: sum(item.status == name for item in rows) for name in
                 ('Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled')}
-    processing = db.scalars(select(ResultProcessingOutcome).where(
-        ResultProcessingOutcome.assessment_id == assessment.id)).all()
+    processing_query = select(ResultProcessingOutcome).where(
+        ResultProcessingOutcome.assessment_id == assessment.id)
+    if lock:
+        processing_query = processing_query.with_for_update()
+    processing = db.scalars(processing_query).all()
     processing_errors = sum(item.status in ('Failed', 'Interrupted') for item in processing)
     processing_pending = sum(item.status in ('Pending', 'Processing') for item in processing)
     successful = {item.request_id for item in processing if item.status == 'Succeeded'}
     missing_processing = sum(item.status == 'Completed' and item.id not in successful for item in rows)
-    attempts = db.scalars(select(ExecutionAttempt).where(
-        ExecutionAttempt.assessment_id == assessment.id)).all()
+    attempts_query = select(ExecutionAttempt).where(
+        ExecutionAttempt.assessment_id == assessment.id)
+    if lock:
+        attempts_query = attempts_query.with_for_update()
+    attempts = db.scalars(attempts_query).all()
     active_attempts = sum(item.status in ('Claimed', 'Running', 'RecoveryRequired') for item in attempts)
-    observations = db.scalars(select(SecurityObservation).where(
+    observations_query = select(SecurityObservation).where(
         SecurityObservation.assessment_id == assessment.id).order_by(
-            SecurityObservation.collected_at, SecurityObservation.id)).all()
+            SecurityObservation.collected_at, SecurityObservation.id)
+    if lock:
+        observations_query = observations_query.with_for_update()
+    observations = db.scalars(observations_query).all()
     recommendations = plan_recommendations(observations)
     decisions = {item.recommendation_id: item.decision for item in db.scalars(
         select(TestingRecommendationDecision).where(
