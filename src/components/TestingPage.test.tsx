@@ -180,7 +180,7 @@ it('switches to T-04A Recommendations and back without writing or inventing sugg
   expect(await screen.findByText('No suggested next steps yet')).toBeVisible()
   expect(screen.getByLabelText('0 recommendations')).toBeVisible()
   expect(screen.queryByRole('table', { name: 'Test Activity' })).not.toBeInTheDocument()
-  expect(screen.getByRole('tab', { name: 'Testing Completion' })).toBeDisabled()
+  expect(screen.getByRole('tab', { name: 'Testing Completion' })).toBeEnabled()
   expect(screen.getByRole('button', { name: 'Run Manual Test' })).toBeDisabled()
   fireEvent.click(screen.getByRole('tab', { name: 'Test Activity' }))
   expect(screen.getByRole('table', { name: 'Test Activity' })).toBeVisible()
