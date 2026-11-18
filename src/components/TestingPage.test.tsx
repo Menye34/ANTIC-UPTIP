@@ -7,12 +7,16 @@ import { assessmentId, executionDetails, testingData } from '../test-fixtures/te
 const reply = (value: unknown, status = 200) => ({ ok: status < 400, status, json: async () => value })
 const expired = vi.fn()
 const showModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
+const closeDialog = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
 beforeEach(() => {
   expired.mockReset()
+  Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value(this: HTMLDialogElement) { this.open = false } })
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value(this: HTMLDialogElement) { this.open = true } })
 })
 afterEach(() => {
   cleanup(); vi.useRealTimers(); vi.unstubAllGlobals()
+  if (closeDialog) Object.defineProperty(HTMLDialogElement.prototype, 'close', closeDialog)
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
   if (showModal) Object.defineProperty(HTMLDialogElement.prototype, 'showModal', showModal)
   else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal')
 })
@@ -129,7 +133,7 @@ it.each(['Running', 'Completed', 'Failed'] as ExecutionStatus[])(
         reason_code: status === 'Failed' ? 'scanner_error' : null, started_at: '2026-11-16T10:01:00Z',
         finished_at: status === 'Running' ? null : '2026-11-16T10:02:00Z',
         exit_code: status === 'Failed' ? 1 : status === 'Completed' ? 0 : null, recovery_reason: null }] }
-    const fetcher = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => reply(
+    const fetcher = vi.fn<(input: RequestInfo | URL, options?: RequestInit) => Promise<ReturnType<typeof reply>>>(async (input) => reply(
       String(input).endsWith('/synthetic-execution-0') ? details : testingData([status])))
     vi.stubGlobal('fetch', fetcher)
     page()
@@ -153,7 +157,7 @@ it('shows actual execution events with friendly labels and timestamps', async ()
 })
 
 it('switches to T-04A Recommendations and back without writing or inventing suggestions', async () => {
-  const fetcher = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => reply(
+  const fetcher = vi.fn<(input: RequestInfo | URL, options?: RequestInit) => Promise<ReturnType<typeof reply>>>(async (input) => reply(
     String(input).endsWith('/recommendations')
       ? { assessment_id: assessmentId, count: 0, recommendations: [], execution_authorized: false }
       : testingData(['Completed'])))
@@ -182,7 +186,7 @@ it('renders only API-provided T-04B recommendations and provenance without start
     source_observation_id: 'observation-1', source_evidence_id: 'evidence-1',
     execution_available: false, execution_status: 'not_supported', suggested_test: null, suggested_tool: null,
   }
-  const fetcher = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) => reply(
+  const fetcher = vi.fn<(input: RequestInfo | URL, options?: RequestInit) => Promise<ReturnType<typeof reply>>>(async (input) => reply(
     String(input).endsWith('/recommendations')
       ? { assessment_id: assessmentId, count: 1, recommendations: [item], execution_authorized: false }
       : testingData(['Completed'])))
@@ -221,4 +225,18 @@ it('does not display a fabricated empty state when recommendations fail', async 
   fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
   expect(await screen.findByText(/Unable to load recommendations/)).toBeVisible()
   expect(screen.queryByText('No suggested next steps yet')).not.toBeInTheDocument()
+})
+
+
+it('clears previous assessment content immediately when the assessment changes', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes('different-assessment')) return new Promise<ReturnType<typeof reply>>(() => {})
+    return reply(testingData(['Completed']))
+  }))
+  const view = page()
+  await screen.findByRole('table', { name: 'Test Activity' })
+  view.rerender(<TestingPage assessmentId="different-assessment" onExpired={expired} />)
+  expect(screen.getByRole('status')).toHaveTextContent('Loading Testing')
+  expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  expect(screen.queryByText('192.0.2.1')).not.toBeInTheDocument()
 })

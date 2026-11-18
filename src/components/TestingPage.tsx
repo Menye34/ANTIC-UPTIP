@@ -151,10 +151,11 @@ function RecommendationReview({ recommendation, onClose }: { recommendation: Rec
   const closeButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    dialog.current?.showModal()
+    const element = dialog.current
+    element?.showModal()
     closeButton.current?.focus()
     return () => {
-      dialog.current?.close()
+      element?.close()
       if (trigger?.isConnected) trigger.focus()
     }
   }, [])
@@ -212,7 +213,13 @@ function RecommendationReview({ recommendation, onClose }: { recommendation: Rec
   </dialog>
 }
 
-export default function TestingPage({ assessmentId, onExpired }: { assessmentId: string; onExpired: () => void }) {
+type TestingPageProps = { assessmentId: string; onExpired: () => void }
+
+export default function TestingPage(props: TestingPageProps) {
+  return <TestingAssessment key={props.assessmentId} {...props} />
+}
+
+function TestingAssessment({ assessmentId, onExpired }: TestingPageProps) {
   const [data, setData] = useState<TestingData>()
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
@@ -251,14 +258,10 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
     return () => { controller.abort(); clearTimeout(timer) }
   }, [assessmentId, onExpired, retry])
 
-  useEffect(() => {
-    setRecommendations(undefined)
-    setRecommendationError('')
-    setReviewedRecommendation(undefined)
-  }, [assessmentId])
+  const hasTestingData = data !== undefined
 
   useEffect(() => {
-    if (activeTab !== 'recommendations' || !data || error) return
+    if (activeTab !== 'recommendations' || !hasTestingData || error) return
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     let stopped = false
@@ -282,7 +285,7 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
     }
     void load()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [activeTab, assessmentId, data === undefined, error, onExpired, recommendationRetry])
+  }, [activeTab, assessmentId, hasTestingData, error, onExpired, recommendationRetry])
 
   const empty = data?.counts.total === 0
   const scope = data?.authorization_scope
