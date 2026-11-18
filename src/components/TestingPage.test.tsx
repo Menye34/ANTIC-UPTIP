@@ -153,7 +153,7 @@ it('shows actual execution events with friendly labels and timestamps', async ()
 })
 
 it('switches to T-04A Recommendations and back without writing or inventing suggestions', async () => {
-  const fetcher = vi.fn(async () => reply(testingData(['Completed'])))
+  const fetcher = vi.fn(async (_input: RequestInfo | URL, _options?: RequestInit) => reply(testingData(['Completed'])))
   vi.stubGlobal('fetch', fetcher)
   page()
   const activity = await screen.findByRole('table', { name: 'Test Activity' })
