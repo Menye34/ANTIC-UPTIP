@@ -354,3 +354,9 @@ from .execution_persistence import (
     ExecutionAttempt, ScannerEvidence, ResultProcessingOutcome,
     SecurityObservation, ExecutionEvent,
 )
+
+
+# Register future recommendation records; these are never dispatchable baseline requests.
+from .recommendation_authorization_models import (
+    RecommendationAuthorizationRecord, RecommendationExecutionRequest,
+)
