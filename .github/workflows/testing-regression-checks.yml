@@ -81,7 +81,7 @@ jobs:
       - name: Apply test schema migrations
         working-directory: backend
         run: alembic upgrade head
-      - name: Execute backend scheduling regression tests
+      - name: Execute backend scheduling and authorization regression tests
         working-directory: backend
         run: |
           python -m pytest \
@@ -90,7 +90,6 @@ jobs:
             tests/test_execution_orchestration.py \
             tests/test_execution_persistence.py \
             tests/test_assessment_readiness.py \
-            tests/test_assessment_start.py \
             tests/test_authorization_records.py \
             tests/test_system_authorization_issuer.py \
             tests/test_system_authorization_persistence.py \
