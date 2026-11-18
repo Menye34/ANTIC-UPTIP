@@ -69,7 +69,7 @@ class Assessment(Base):
     __tablename__ = 'assessments'
     __table_args__ = (
         UniqueConstraint('creator_id', 'idempotency_key', name='uq_assessments_creator_idempotency'),
-        CheckConstraint("status IN ('Draft', 'Ready', 'Testing')", name='ck_assessments_start_state'),
+        CheckConstraint("status IN ('Draft', 'Ready', 'Testing', 'Finding Review')", name='ck_assessments_start_state'),
         CheckConstraint('end_date >= start_date', name='ck_assessments_window'),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -360,3 +360,6 @@ from .execution_persistence import (
 from .recommendation_authorization_models import (
     RecommendationAuthorizationRecord, RecommendationExecutionRequest,
 )
+
+# Register Testing Completion records.
+from .testing_completion_models import TestingRecommendationDecision, TestingCompletionEvent
