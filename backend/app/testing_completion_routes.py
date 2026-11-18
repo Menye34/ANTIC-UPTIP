@@ -78,7 +78,7 @@ def readiness(db, assessment, *, lock=False):
     decisions = {item.recommendation_id: item.decision for item in db.scalars(
         select(TestingRecommendationDecision).where(
             TestingRecommendationDecision.assessment_id == assessment.id)).all()}
-    pending = [item['id'] for item in recommendations if item['id'] not in decisions]
+    pending = [item['id'] for item in recommendations if decisions.get(item['id']) != 'Reviewed']
     blockers = []
     if not rows:
         blockers.append('no_tests')
@@ -97,7 +97,8 @@ def readiness(db, assessment, *, lock=False):
         'processing_errors': processing_errors, 'processing_pending': processing_pending,
         'missing_processing': missing_processing, 'recommendation_count': len(recommendations),
         'pending_recommendation_ids': pending,
-        'reviewed_recommendations': len(recommendations) - len(pending),
+        'reviewed_recommendations': sum(decisions.get(item['id']) == 'Reviewed' for item in recommendations),
+        'deferred_recommendations': sum(decisions.get(item['id']) == 'Deferred' for item in recommendations),
         'candidate_findings': None,
         'blockers': blockers,
     }
