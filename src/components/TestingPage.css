@@ -97,3 +97,12 @@
   .testing-detail-grid { grid-template-columns: 1fr; }
   .testing-result-metrics { grid-template-columns: 1fr; }
 }
+
+/* T-04A — Recommendations empty state. */
+.testing-recommendation-count { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 26px; margin-left: 6px; padding: 0 8px; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 12px; font-weight: 600; }
+.testing-recommendations { min-height: 236px; padding: 20px 24px 24px; }
+.testing-recommendations h2 { font-size: 16px; font-weight: 600; line-height: 19px; }
+.testing-recommendations-empty { margin-top: 20px; min-height: 151px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px; }
+.testing-recommendations-empty-icon { color: #64748b; font-size: 30px; line-height: 28px; }
+.testing-recommendations-empty h3 { margin-top: 12px; color: #1e293b; font-size: 16px; font-weight: 600; line-height: 20px; }
+.testing-recommendations-empty p { margin-top: 10px; color: #64748b; font-size: 13px; line-height: 20px; max-width: 680px; }
