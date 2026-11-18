@@ -15,7 +15,7 @@ from test_assessments import API, add_analyst, sign_in
 
 @pytest.fixture
 def prepared(client, db, monkeypatch):
-    user = add_analyst(db, 'schedule-owner')
+    user = add_analyst(db, 'schedule-owner-' + uuid4().hex)
     headers = sign_in(client, user.username)
     monkeypatch.setattr(get_settings(), 'start_review_key', SecretStr('synthetic-review-signing-key-' + 'x' * 40))
     result = client.post(API, headers=headers, json={'name': 'Scheduling assessment'})
