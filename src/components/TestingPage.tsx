@@ -149,10 +149,13 @@ function RecommendationReview({ recommendation, onClose }: { recommendation: Rec
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
     dialog.current?.showModal()
     closeButton.current?.focus()
-    return () => { dialog.current?.close(); previouslyFocused?.focus() }
+    return () => {
+      dialog.current?.close()
+      if (trigger?.isConnected) trigger.focus()
+    }
   }, [])
   return <dialog ref={dialog} className="testing-review-dialog" aria-labelledby="recommendation-review-title"
     onCancel={event => { event.preventDefault(); onClose() }}>
