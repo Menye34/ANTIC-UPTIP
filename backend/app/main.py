@@ -24,6 +24,8 @@ def create_app():
     app.include_router(target_router)
     from .testing_routes import router as testing_router
     app.include_router(testing_router)
+    from .testing_completion_routes import router as completion_router
+    app.include_router(completion_router)
     app.add_middleware(BodyLimitMiddleware)
 
     @app.middleware('http')
