@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AssessmentStartError } from '../services/assessmentStart'
-import { getExecutionDetails, getTesting } from '../services/testing'
-import type { ExecutionDetails, TestingData } from '../services/testing'
+import { getExecutionDetails, getRecommendations, getTesting } from '../services/testing'
+import type { ExecutionDetails, RecommendationData, TestingData } from '../services/testing'
 import plus from '../assets/testing/Plus.svg'
 import information from '../assets/testing/Information.svg'
 import marker from '../assets/testing/Marker.svg'
@@ -151,6 +151,10 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
   const [selected, setSelected] = useState<string>()
   const [activeTab, setActiveTab] = useState<'activity' | 'recommendations'>('activity')
   const detailButton = useRef<HTMLButtonElement | null>(null)
+  const [recommendations, setRecommendations] = useState<RecommendationData>()
+  const [recommendationError, setRecommendationError] = useState('')
+  const [recommendationRetry, setRecommendationRetry] = useState(0)
+  const [reviewedRecommendation, setReviewedRecommendation] = useState<string>()
 
   useEffect(() => {
     const controller = new AbortController()
@@ -179,6 +183,39 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
     return () => { controller.abort(); clearTimeout(timer) }
   }, [assessmentId, onExpired, retry])
 
+  useEffect(() => {
+    setRecommendations(undefined)
+    setRecommendationError('')
+    setReviewedRecommendation(undefined)
+  }, [assessmentId])
+
+  useEffect(() => {
+    if (activeTab !== 'recommendations' || !data || error) return
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let stopped = false
+    async function load() {
+      try {
+        const result = await getRecommendations(assessmentId, controller.signal)
+        if (controller.signal.aborted) return
+        setRecommendations(result)
+        setRecommendationError('')
+      } catch (failure) {
+        if (controller.signal.aborted) return
+        if (failure instanceof AssessmentStartError && [401, 403, 404].includes(failure.status)) {
+          stopped = true
+          setRecommendations(undefined)
+          setRecommendationError(failure.status === 401 ? 'Your session has ended. Sign in again to continue.' : 'Recommendations unavailable.')
+          if (failure.status === 401) onExpired()
+        } else setRecommendationError('Unable to load recommendations. Retry to retrieve the latest suggestions.')
+      } finally {
+        if (!controller.signal.aborted && !stopped) timer = setTimeout(() => { void load() }, 5000)
+      }
+    }
+    void load()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [activeTab, assessmentId, data === undefined, error, onExpired, recommendationRetry])
+
   const empty = data?.counts.total === 0
   const scope = data?.authorization_scope
   return <>
@@ -190,7 +227,7 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
     </header>
     <div className="testing-tabs" role="tablist" aria-label="Testing views">
       <button type="button" role="tab" id="test-activity-tab" aria-selected={activeTab === 'activity'} aria-controls="test-activity-panel" onClick={() => setActiveTab('activity')}>Test Activity</button>
-      <button type="button" role="tab" id="recommendations-tab" aria-selected={activeTab === 'recommendations'} aria-controls="recommendations-panel" onClick={() => setActiveTab('recommendations')}>Recommendations <span className="testing-recommendation-count" aria-label="0 recommendations">0</span></button>
+      <button type="button" role="tab" id="recommendations-tab" aria-selected={activeTab === 'recommendations'} aria-controls="recommendations-panel" onClick={() => setActiveTab('recommendations')}>Recommendations <span className="testing-recommendation-count" aria-label={`${recommendations?.count ?? 0} recommendations`}>{recommendations?.count ?? 0}</span></button>
       <button type="button" role="tab" aria-selected="false" disabled title="Testing Completion is unavailable in this release">Testing Completion</button>
     </div>
     {error && <section className="testing-load-error analyst-card" role="alert"><p>{error}</p>
@@ -210,11 +247,31 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
             : <><p>Recommendations are based on the information currently available.</p><StatusMessage data={data} /></>}</div></section>
         <section className="analyst-card testing-recommendations" aria-label="Recommendations">
           <h2>Recommendations</h2>
-          <div className="testing-recommendations-empty">
+          {recommendationError && <div role="alert"><p>{recommendationError}</p>
+            <button type="button" className="analyst-link" onClick={() => setRecommendationRetry(n => n + 1)}>Retry recommendations</button></div>}
+          {!recommendations && !recommendationError && <p role="status">Loading recommendations…</p>}
+          {recommendations?.count === 0 && !recommendationError && <div className="testing-recommendations-empty">
             <div className="testing-recommendations-empty-icon" aria-hidden="true">⌕</div>
             <h3>No suggested next steps yet</h3>
             <p>No recommendations are available for this assessment yet. Suggested next steps will appear here when supported analysis is available.</p>
-          </div>
+          </div>}
+          {recommendations && recommendations.count > 0 && <div className="testing-recommendation-list">
+            {recommendations.recommendations.map(item => <article className="testing-recommendation-item" key={item.id}>
+              <div className="testing-recommendation-title"><h3>{item.title}</h3><span className="testing-recommendation-status">Review required</span></div>
+              <p><strong>Target:</strong> {item.target}</p>
+              <h4>Why this action is suggested</h4><p>{item.reason}</p>
+              <p className="testing-secondary">This suggestion is for analyst review only. No follow-up test has been authorized or scheduled.</p>
+              <button type="button" className="analyst-link" onClick={() => setReviewedRecommendation(
+                reviewedRecommendation === item.id ? undefined : item.id
+              )}>{reviewedRecommendation === item.id ? 'Close Review' : 'Review Suggestion'}</button>
+              {reviewedRecommendation === item.id && <div className="testing-recommendation-review">
+                <h4>Observation provenance</h4>
+                <dl className="testing-metadata"><div><dt>Observation ID</dt><dd>{item.source_observation_id}</dd></div>
+                  <div><dt>Evidence ID</dt><dd>{item.source_evidence_id}</dd></div>
+                  <div><dt>Execution eligibility</dt><dd>Not supported — no test can be started from this suggestion.</dd></div></dl>
+              </div>}
+            </article>)}
+          </div>}
         </section>
       </> : <>
       <div className="testing-metrics">{[
