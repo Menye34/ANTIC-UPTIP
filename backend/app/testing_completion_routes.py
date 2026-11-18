@@ -82,6 +82,8 @@ def readiness(db, assessment, *, lock=False):
     blockers = []
     if not rows:
         blockers.append('no_tests')
+    if assessment.status == 'Finding Review' and db.get(TestingCompletionEvent, assessment.id) is None:
+        blockers.append('missing_completion_receipt')
     if statuses['Queued'] or statuses['Running'] or active_attempts:
         blockers.append('active_tests')
     if any(statuses[name] for name in ('Failed', 'Stopped', 'Blocked', 'Cancelled')):
