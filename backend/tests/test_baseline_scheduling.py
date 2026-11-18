@@ -153,8 +153,24 @@ def test_database_prevents_duplicate_scheduling(client, db, start_case):
             db.flush()
 
 
+@pytest.fixture
+def v3_scheduling_concurrency(request, monkeypatch, legacy_execution_endpoint_contract):
+    """Select the current scheduling evaluator before preparing isolated data.
+
+    This module intentionally imports the legacy evaluator for historical
+    tests. The v3 concurrency fixture must not inherit that override.
+    """
+    from app import assessment_routes, assessment_readiness
+
+    monkeypatch.setattr(
+        assessment_routes, 'evaluate_readiness',
+        assessment_readiness.evaluate_readiness,
+    )
+    return request.getfixturevalue('scheduling_concurrency')
+
+
 @pytest.mark.parametrize('same_key', [False, True])
-def test_concurrent_start_has_one_authorization_and_queue(scheduling_concurrency, same_key):
+def test_concurrent_start_has_one_authorization_and_queue(v3_scheduling_concurrency, same_key):
     """Concurrent starts use the isolated, migrated scheduling test database."""
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
@@ -162,7 +178,7 @@ def test_concurrent_start_has_one_authorization_and_queue(scheduling_concurrency
 
     from fastapi.testclient import TestClient
 
-    app, factory, (path, headers, _), review_data, cookies = scheduling_concurrency
+    app, factory, (path, headers, _), review_data, cookies = v3_scheduling_concurrency
     assert review_data['schema_version'] == 3
     assert review_data['confirmation_possible']
     body = confirmation(review_data)
@@ -188,7 +204,7 @@ def test_concurrent_start_has_one_authorization_and_queue(scheduling_concurrency
         assert count_for_assessment(check, BaselineExecutionRequest, path) == 1
 
 
-def test_overview_keeps_one_snapshot_during_start(scheduling_concurrency):
+def test_overview_keeps_one_snapshot_during_start(v3_scheduling_concurrency):
     """A concurrent Start cannot mix Draft overview data with Testing queue counts."""
     from fastapi.testclient import TestClient
 
