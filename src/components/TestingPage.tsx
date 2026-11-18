@@ -146,6 +146,7 @@ function eventLabel(event: string) {
 
 
 function RecommendationReview({ recommendation, onClose }: { recommendation: Recommendation; onClose: () => void }) {
+  const [choosingAlternative, setChoosingAlternative] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -160,10 +161,28 @@ function RecommendationReview({ recommendation, onClose }: { recommendation: Rec
   return <dialog ref={dialog} className="testing-review-dialog" aria-labelledby="recommendation-review-title"
     onCancel={event => { event.preventDefault(); onClose() }}>
     <div className="testing-review-header">
-      <h2 id="recommendation-review-title">Review Recommendation</h2>
+      <h2 id="recommendation-review-title">{choosingAlternative ? 'Choose Alternative' : 'Review Recommendation'}</h2>
       <button ref={closeButton} type="button" aria-label="Close recommendation review" onClick={onClose}>×</button>
     </div>
-    <div className="testing-review-body">
+    {choosingAlternative ? <div className="testing-review-body">
+      <section className="testing-alternative-current" aria-label="Current Recommendation">
+        <h3>Current Recommendation</h3>
+        <p>{recommendation.title}</p>
+        <dl className="testing-review-fields">
+          <div><dt>Target</dt><dd>{recommendation.target}</dd></div>
+          <div><dt>Suggested test</dt><dd>Not available</dd></div>
+        </dl>
+      </section>
+      <section aria-label="Select Alternative">
+        <h3>Select Alternative</h3>
+        <p>Choose an integrated security tool and one of its configured test profiles.</p>
+        <label className="testing-alternative-field" htmlFor="alternative-tool">Security Tool</label>
+        <select id="alternative-tool" disabled value=""><option value="">No verified tools available for this recommendation</option></select>
+        <label className="testing-alternative-field" htmlFor="alternative-profile">Test Profile</label>
+        <select id="alternative-profile" disabled value=""><option value="">No eligible test profiles available</option></select>
+        <p role="status" className="testing-review-safety">No authorized alternative is currently available. Tool integration alone does not establish test eligibility, scope authorization, or dispatch support.</p>
+      </section>
+    </div> : <div className="testing-review-body">
       <h3>{recommendation.title}</h3>
       <dl className="testing-review-fields">
         <div><dt>Target</dt><dd>{recommendation.target}</dd></div>
@@ -181,9 +200,14 @@ function RecommendationReview({ recommendation, onClose }: { recommendation: Rec
       <p className="testing-review-safety">Analyst review only. Reviewing this recommendation does not authorize or schedule a security test.</p>
     </div>
     <footer className="testing-review-footer">
-      <button type="button" onClick={onClose}>Close</button>
-      <button type="button" disabled title="No authorized executable test is available">Start Test</button>
-      <button type="button" disabled title="Alternative test profiles are not yet available">Choose Alternative</button>
+      {choosingAlternative ? <>
+        <button type="button" onClick={() => setChoosingAlternative(false)}>Cancel</button>
+        <button type="button" disabled title="No verified alternative is available">Confirm Alternative</button>
+      </> : <>
+        <button type="button" onClick={onClose}>Close</button>
+        <button type="button" disabled title="No authorized executable test is available">Start Test</button>
+        <button type="button" onClick={() => setChoosingAlternative(true)}>Choose Alternative</button>
+      </>}
     </footer>
   </dialog>
 }
