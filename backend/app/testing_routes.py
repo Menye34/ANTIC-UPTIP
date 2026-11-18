@@ -166,3 +166,21 @@ def list_recommendations(assessment_id: UUID, user: User = Depends(analyst),
         'recommendations': recommendations,
         'execution_authorized': False,
     }
+
+
+@router.get('/recommendations/{recommendation_id}/eligibility')
+def recommendation_eligibility(assessment_id: UUID, recommendation_id: str,
+                               user: User = Depends(analyst), db: Session = Depends(get_db)):
+    """Fresh read-only eligibility check; no permission, scheduling or dispatch."""
+    from .recommendation_eligibility import evaluate_recommendation
+
+    assessment_for(db, assessment_id, user)
+    observations = db.scalars(select(SecurityObservation).where(
+        SecurityObservation.assessment_id == assessment_id,
+    ).order_by(SecurityObservation.collected_at, SecurityObservation.id)).all()
+    result = evaluate_recommendation(recommendation_id, observations)
+    if result['reason_code'] == 'invalid_recommendation_id':
+        raise HTTPException(422, detail='Invalid recommendation identifier')
+    if result['reason_code'] == 'recommendation_not_current':
+        raise HTTPException(404, detail='Recommendation unavailable')
+    return {'assessment_id': assessment_id, **result}
