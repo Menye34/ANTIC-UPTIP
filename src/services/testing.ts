@@ -73,3 +73,43 @@ export async function getExecutionDetails(assessmentId: string, executionId: str
       || !Array.isArray(result.events)) throw new Error('Invalid execution details')
   return result
 }
+
+export interface Recommendation {
+  id: string
+  kind: 'review_host_discovery'
+  title: string
+  target_id: string
+  target: string
+  service: string | null
+  port: number | null
+  reason: string
+  source_observation_id: string
+  source_evidence_id: string
+  execution_available: false
+  execution_status: 'not_supported'
+  suggested_test: null
+  suggested_tool: null
+}
+export interface RecommendationData {
+  assessment_id: string
+  count: number
+  recommendations: Recommendation[]
+  execution_authorized: false
+}
+export async function getRecommendations(assessmentId: string, signal: AbortSignal) {
+  const result = await startRequest<RecommendationData>(assessmentId, '/testing/recommendations', signal)
+  if (result.assessment_id !== assessmentId || result.execution_authorized !== false
+    || !Number.isInteger(result.count) || result.count < 0
+    || !Array.isArray(result.recommendations) || result.count !== result.recommendations.length
+    || new Set(result.recommendations.map(row => row.id)).size !== result.count
+    || result.recommendations.some(row => !row || typeof row.id !== 'string'
+      || row.kind !== 'review_host_discovery' || row.title !== 'Review responding host'
+      || typeof row.target_id !== 'string' || typeof row.target !== 'string'
+      || typeof row.reason !== 'string' || typeof row.source_observation_id !== 'string'
+      || typeof row.source_evidence_id !== 'string' || row.execution_available !== false
+      || row.execution_status !== 'not_supported' || row.suggested_test !== null
+      || row.suggested_tool !== null || row.port !== null || row.service !== null)) {
+    throw new Error('Invalid recommendations response')
+  }
+  return result
+}
