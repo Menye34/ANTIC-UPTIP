@@ -24,7 +24,14 @@ def upgrade():
         sa.Column('completed_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('snapshot', sa.JSON(), nullable=False))
 
+    # Runtime access is scoped to review decisions and immutable completion receipts.
+    # No execution authorization or scanner dispatch privileges are granted.
+    op.execute("GRANT SELECT, INSERT, UPDATE ON public.testing_recommendation_decisions TO uptip_runtime")
+    op.execute("GRANT SELECT, INSERT ON public.testing_completion_events TO uptip_runtime")
+
 def downgrade():
+    op.execute("REVOKE SELECT, INSERT, UPDATE ON public.testing_recommendation_decisions FROM uptip_runtime")
+    op.execute("REVOKE SELECT, INSERT ON public.testing_completion_events FROM uptip_runtime")
     op.execute("UPDATE assessments SET status = 'Testing' WHERE status = 'Finding Review'")
     op.drop_table('testing_completion_events')
     op.drop_table('testing_recommendation_decisions')
