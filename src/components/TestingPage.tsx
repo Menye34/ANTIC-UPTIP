@@ -305,7 +305,7 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
               <p><strong>Target:</strong> {item.target}</p>
               <h4>Why this action is suggested</h4><p>{item.reason}</p>
               <p className="testing-secondary">This suggestion is for analyst review only. No follow-up test has been authorized or scheduled.</p>
-              <button type="button" className="analyst-link" onClick={() => setReviewedRecommendation(item.id)}>Review Suggestion</button>
+              <button type="button" className="analyst-link" onClick={event => { event.currentTarget.focus(); setReviewedRecommendation(item.id) }}>Review Suggestion</button>
             </article>)}
           </div>}
         </section>
