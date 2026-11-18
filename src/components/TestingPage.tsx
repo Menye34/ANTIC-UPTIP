@@ -205,10 +205,9 @@ export default function TestingPage({ assessmentId, onExpired }: { assessmentId:
         ].map(([label, value]) => <section className="analyst-card" key={label} aria-label={String(label)}>
           <p>{label}</p><strong>{value}</strong></section>)}</div>
         <section className="testing-notice" aria-label="Current Status"><img src={information} alt="" />
-          <div><h2>Current Status</h2><p>{data.counts.total === 0
-            ? 'No tests have been scheduled. Recommendations will appear when supported results become available.'
-            : 'Recommendations are based on the information currently available. '}
-            {data.counts.total > 0 && <StatusMessage data={data} />}</p></div></section>
+          <div><h2>Current Status</h2>{data.counts.total === 0
+            ? <p>No tests have been scheduled. Recommendations will appear when supported results become available.</p>
+            : <><p>Recommendations are based on the information currently available.</p><StatusMessage data={data} /></>}</div></section>
         <section className="analyst-card testing-recommendations" aria-label="Recommendations">
           <h2>Recommendations</h2>
           <div className="testing-recommendations-empty">
