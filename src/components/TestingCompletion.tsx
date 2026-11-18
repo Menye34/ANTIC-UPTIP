@@ -136,11 +136,11 @@ export default function TestingCompletion({ assessmentId, csrfToken, testing, on
           <span className="testing-completion-status">{processing ? 'Needs attention' : 'Clear'}</span>
         </div>
       </div>
-      {!completed && review.recommendations.some(item => !item.decision) && <section className="testing-completion-decisions" aria-label="Recommendation decisions">
+      {!completed && review.recommendations.some(item => item.decision !== 'Reviewed') && <section className="testing-completion-decisions" aria-label="Recommendation decisions">
         <h3>Recommendation decisions</h3>
-        <p>Record an explicit decision for each recommendation. Deferring a recommendation does not authorize a new test.</p>
-        {review.recommendations.filter(item => !item.decision).map(item => <div key={item.id} className="testing-completion-decision">
-          <span>{item.title}</span>
+        <p>Record an explicit decision for each recommendation. Deferring a recommendation does not authorize a new test or clear the completion safety gate.</p>
+        {review.recommendations.filter(item => item.decision !== 'Reviewed').map(item => <div key={item.id} className="testing-completion-decision">
+          <span>{item.title}{item.decision === 'Deferred' ? ' · Deferred (still requires review)' : ''}</span>
           <button type="button" disabled={submitting || !csrfToken} onClick={() => { void act(item.id, 'Reviewed') }}>Mark reviewed</button>
           <button type="button" disabled={submitting || !csrfToken} onClick={() => { void act(item.id, 'Deferred') }}>Defer</button>
         </div>)}
