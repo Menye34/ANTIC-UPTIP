@@ -184,3 +184,18 @@ def recommendation_eligibility(assessment_id: UUID, recommendation_id: str,
     if result['reason_code'] == 'recommendation_not_current':
         raise HTTPException(404, detail='Recommendation unavailable')
     return {'assessment_id': assessment_id, **result}
+
+
+@router.get('/recommendations/{recommendation_id}/authorization-review')
+def recommendation_authorization_review(assessment_id: UUID, recommendation_id: str,
+                                        user: User = Depends(analyst), db: Session = Depends(get_db)):
+    """Protected read-only review; not an approval or execution endpoint."""
+    from .recommendation_authorization_review import review_authorization
+
+    assessment = assessment_for(db, assessment_id, user)
+    result = review_authorization(db, assessment, recommendation_id)
+    if result['reason_code'] == 'invalid_recommendation_id':
+        raise HTTPException(422, detail='Invalid recommendation identifier')
+    if result['reason_code'] == 'recommendation_not_current':
+        raise HTTPException(404, detail='Recommendation unavailable')
+    return {'assessment_id': assessment_id, **result}
