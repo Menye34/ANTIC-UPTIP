@@ -41,11 +41,18 @@ def db(engine):
         and runtime_url.database in ("uptip", "uptip_test_readiness_fix")
         and runtime_url.host == owner_url.host == "127.0.0.1"
         and runtime_url.port == owner_url.port
-        and runtime_url.port in (None, 5432)
+        and (runtime_url.port in (None, 5432) or os.environ.get('UPTIP_DISPOSABLE_ADMIN_URL'))
         and not runtime_url.query
         and not owner_url.query
     ):
         pytest.fail("Unsafe persistence-test database configuration")
+
+    if os.environ.get('UPTIP_DISPOSABLE_ADMIN_URL'):
+        from disposable_postgres import scheduling_database
+        verify, _, _ = scheduling_database(
+            'uptip_test_schedule_' + uuid4().hex, os.environ['UPTIP_DISPOSABLE_ADMIN_URL'],
+            owner_raw, runtime_raw, engine.url)
+        verify('verify')
 
     test_url = owner_url.set(database="uptip_test_readiness_fix")
     test_engine = create_engine(test_url, hide_parameters=True)
@@ -275,7 +282,16 @@ def test_0018_preserves_queued_requests_metadata_and_refuses_history_downgrade(s
         assert db.scalar(text('SELECT version_num FROM alembic_version'))=='0017'
     command.upgrade(config,'0018')
     with engine.connect() as conn:
-        assert compare_metadata(MigrationContext.configure(conn),Base.metadata)==[]
+        # Compare this historical revision only with its own models. The full
+        # current metadata is checked after upgrade to head by Phase 3 tests.
+        from sqlalchemy import MetaData
+        historical = MetaData()
+        later_tables = {'recommendation_authorization_records', 'recommendation_execution_requests',
+                        'testing_recommendation_decisions', 'testing_completion_events'}
+        for table in Base.metadata.sorted_tables:
+            if table.name not in later_tables:
+                table.to_metadata(historical)
+        assert compare_metadata(MigrationContext.configure(conn),historical)==[]
         assert conn.scalar(text('SELECT version_num FROM alembic_version'))=='0018'
     # Empty persistence downgrade is safe even with a pre-existing queue.
     command.downgrade(config,'0017');command.upgrade(config,'0018')

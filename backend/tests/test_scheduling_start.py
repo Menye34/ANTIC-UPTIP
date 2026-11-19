@@ -237,7 +237,13 @@ def scheduling_concurrency(engine,monkeypatch,request):
 
     helper = Path('/usr/local/lib/uptip-test/scheduling_db_admin.py')
     ci_admin_url = os.environ.get('UPTIP_CI_POSTGRES_ADMIN_URL')
-    if ci_admin_url:
+    direct_admin = os.environ.get('UPTIP_DISPOSABLE_ADMIN_URL')
+    if direct_admin:
+        from disposable_postgres import scheduling_database
+        administer, direct_owner, direct_runtime = scheduling_database(
+            name, direct_admin, os.environ.get('UPTIP_MIGRATION_DATABASE_URL', ''),
+            os.environ.get('UPTIP_DATABASE_URL', ''), engine.url)
+    elif ci_admin_url:
         from sqlalchemy.engine import make_url
         admin_url = make_url(ci_admin_url)
         if not (
@@ -282,7 +288,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
             )
 
     administer('create')
-    dedicated=create_engine(engine.url.set(database=name))
+    dedicated=create_engine(direct_runtime if direct_admin else engine.url.set(database=name))
     settings=get_settings()
     try:
         with dedicated.connect() as c:
@@ -292,13 +298,14 @@ def scheduling_concurrency(engine,monkeypatch,request):
         from dotenv import dotenv_values
         from sqlalchemy.engine import make_url
 
-        migration_raw = (os.environ.get("UPTIP_MIGRATION_DATABASE_URL") if ci_admin_url else dotenv_values(".env").get("UPTIP_MIGRATION_DATABASE_URL"))
+        migration_raw = (direct_owner.render_as_string(hide_password=False) if direct_admin else
+                         (os.environ.get("UPTIP_MIGRATION_DATABASE_URL") if ci_admin_url else dotenv_values(".env").get("UPTIP_MIGRATION_DATABASE_URL")))
         if not migration_raw:
             raise RuntimeError("Missing test migration database configuration")
 
         migration_url = make_url(migration_raw)
 
-        if not (
+        if not direct_admin and (not (
             migration_url.drivername == "postgresql+psycopg"
             and migration_url.username == "uptip"
             and migration_url.database == ("uptip_test_readiness_fix" if ci_admin_url else "uptip")
@@ -306,7 +313,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
             and migration_url.port in (None, 5432)
             and not migration_url.query
             and dedicated.url.username == ("uptip" if ci_admin_url else "uptip_runtime")
-        ):
+        )):
             raise RuntimeError("Unsafe test migration database configuration")
 
         migration_url = migration_url.set(database=name)
@@ -318,7 +325,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
         )
         config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
         config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
-        command.upgrade(config, '0017' if getattr(request, 'param', None) == 'migration_0017' else ('head' if ci_admin_url else '0017'))
+        command.upgrade(config, '0019' if getattr(request, 'param', None) == 'migration_0019_empty' else ('0017' if getattr(request, 'param', None) == 'migration_0017' else ('head' if ci_admin_url or direct_admin else '0017')))
         # Use the migration owner only for this disposable test database.
         # The production runtime role remains restricted.
         owner_engine = create_engine(migration_url)
@@ -330,7 +337,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
         app.dependency_overrides[get_db]=independent_db
         with factory() as db, TestClient(app,base_url='https://testserver') as c:
             c.headers['Origin']='https://testserver'
-            if getattr(request,'param',None)=='empty':
+            if getattr(request,'param',None) in ('empty', 'migration_0019_empty'):
                 yield app,factory,None,None,{}
             else:
                 result=prepared.__wrapped__(c,db,monkeypatch)

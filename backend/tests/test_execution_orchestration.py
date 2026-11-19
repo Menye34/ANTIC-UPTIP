@@ -369,7 +369,7 @@ def test_claim_event_failure_rolls_back_claim(db, request_row):
     assert db.get(BaselineExecutionRequest, request_row.id).status == 'Queued'
 
 
-@pytest.mark.parametrize('scheduling_concurrency', ['empty'], indirect=True)
+@pytest.mark.parametrize('scheduling_concurrency', ['migration_0019_empty'], indirect=True)
 def test_migration_refuses_removing_recorded_process_protection(scheduling_concurrency, monkeypatch):
     from pathlib import Path
     from alembic import command

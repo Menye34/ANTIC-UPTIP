@@ -224,7 +224,7 @@ export default function AssessmentPage(props: AssessmentPageProps) {
     initials={props.username.slice(0, 2).toUpperCase()} signingOut={props.signingOut} onSignOut={props.onSignOut}>
     <main className={testing ? 'analyst-content testing-content' : create ? 'analyst-content' : 'analyst-content assessment-overview'}>
       {props.logoutFailed && <p role="alert">Unable to sign out. Please try again.</p>}
-      {testing ? <TestingPage key={props.path} assessmentId={props.path.split('/').at(-2)!} onExpired={props.onExpired} />
+      {testing ? <TestingPage key={props.path} assessmentId={props.path.split('/').at(-2)!} csrfToken={props.csrfToken} onExpired={props.onExpired} />
         : create ? <CreateForm {...props} /> : scopeOverview && targets ? <AssessmentTargets overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} navigate={props.navigate} />
         : scopeOverview ? <AuthorizedScope overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} /> : <Overview {...props} />}
     </main>

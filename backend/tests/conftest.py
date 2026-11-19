@@ -101,7 +101,8 @@ def migration_db(monkeypatch):
     settings = get_settings()
     runtime_url = make_url(settings.database_url)
     migration_url = make_url(settings.migration_database_url)
-    if not (
+    direct_admin = os.environ.get('UPTIP_DISPOSABLE_ADMIN_URL')
+    if not direct_admin and not (
         runtime_url.drivername == migration_url.drivername == 'postgresql+psycopg'
         and runtime_url.username == 'uptip_runtime'
         and migration_url.username == 'uptip'
@@ -115,7 +116,7 @@ def migration_db(monkeypatch):
 
     name = 'uptip_test_migration_' + uuid4().hex
     helper = Path('/usr/local/lib/uptip-test/migration_db_admin.py')
-    if not helper.is_file():
+    if not direct_admin and not helper.is_file():
         pytest.fail('Install the restricted migration DB admin helper before testing')
 
     def administer(action):
@@ -124,6 +125,11 @@ def migration_db(monkeypatch):
             check=True, timeout=30,
         )
 
+    if direct_admin:
+        from disposable_postgres import scheduling_database
+        administer, migration_url, runtime_url = scheduling_database(
+            name, direct_admin, settings.migration_database_url, settings.database_url,
+            os.environ.get('UPTIP_TEST_DATABASE_URL', ''), kind='migration')
     administer('create')
     dedicated = None
     migration_engine = None
@@ -144,6 +150,17 @@ def migration_db(monkeypatch):
                             test_migration_url.render_as_string(hide_password=False))
         config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
         command.upgrade(config, '0016')
+        if direct_admin:
+            # Bootstrap only this marked test DB's pre-Start runtime grants.
+            # No owner membership, DDL, TRUNCATE or protected-history UPDATE.
+            with migration_engine.begin() as connection:
+                connection.execute(text('GRANT USAGE, SELECT ON SEQUENCE assessment_reference_sequence TO uptip_runtime'))
+                connection.execute(text('GRANT SELECT ON roles TO uptip_runtime'))
+                connection.execute(text('GRANT SELECT, UPDATE ON users TO uptip_runtime'))
+                connection.execute(text('GRANT SELECT, INSERT, UPDATE, DELETE ON auth_sessions, login_buckets, password_change_challenges TO uptip_runtime'))
+                connection.execute(text('GRANT SELECT, INSERT ON auth_events TO uptip_runtime'))
+                connection.execute(text('GRANT SELECT, INSERT, UPDATE ON assessments, assessment_assignments, scope_entries, assessment_targets, baseline_tool_states, baseline_assignments TO uptip_runtime'))
+                connection.execute(text('GRANT SELECT, INSERT ON assessment_creation_events, scope_events, baseline_evaluations TO uptip_runtime'))
         dedicated = create_engine(test_runtime_url, hide_parameters=True)
         with migration_engine.connect() as connection:
             assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '0016'
@@ -186,7 +203,7 @@ def migration_client(migration_db):
     app.dependency_overrides.clear()
 
 @pytest.fixture
-def committed_db(engine):
+def committed_db(engine, monkeypatch):
     """Committed database session for isolated concurrency tests."""
     from sqlalchemy.engine import make_url
 
@@ -203,6 +220,31 @@ def committed_db(engine):
         or source_url.query
     ):
         pytest.fail("Unsafe concurrency database configuration")
+
+    direct_admin = os.environ.get('UPTIP_DISPOSABLE_ADMIN_URL')
+    if direct_admin:
+        from uuid import uuid4
+        from disposable_postgres import scheduling_database
+        from app.config import get_settings
+        settings = get_settings()
+        administer, owner, _ = scheduling_database(
+            'uptip_test_schedule_' + uuid4().hex, direct_admin,
+            os.environ.get('UPTIP_MIGRATION_DATABASE_URL', ''),
+            os.environ.get('UPTIP_DATABASE_URL', ''), source_url)
+        administer('create')
+        isolated = create_engine(owner, hide_parameters=True)
+        try:
+            monkeypatch.setattr(settings, 'migration_database_url', owner.render_as_string(hide_password=False))
+            config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
+            config.set_main_option('script_location', str(Path(__file__).resolve().parents[1] / 'migrations'))
+            command.upgrade(config, 'head')
+            with sessionmaker(isolated, expire_on_commit=False)() as session:
+                yield session
+                session.rollback()
+        finally:
+            isolated.dispose()
+            administer('drop')
+        return
 
     url = source_url.set(database="uptip_test_concurrency")
     dedicated_engine = create_engine(url, hide_parameters=True)

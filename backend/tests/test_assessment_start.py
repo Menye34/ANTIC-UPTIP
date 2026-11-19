@@ -17,7 +17,9 @@ from test_execution_persistence import db  # noqa: F401  # Isolated owner-role t
 
 
 def prepare_start_case(client, db, monkeypatch, authorization_db=None):
-    user = add_analyst(db, 'start-creator-' + uuid4().hex[:12])
+    # Account provisioning is privileged; API calls still use the runtime session.
+    user = add_analyst(authorization_db if authorization_db is not None else db,
+                       'start-creator-' + uuid4().hex[:12])
     headers = sign_in(client, user.username)
     response = client.post(API, headers=headers, json={'name': 'Start test'})
     assert response.status_code == 201
@@ -718,6 +720,8 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
             finally:
                 app.dependency_overrides[get_db] = fresh_db
 
+        with migration_engine.connect() as connection:
+            revision_before = connection.scalar(text("SELECT version_num FROM alembic_version"))
         with pytest.raises(DBAPIError, match="Cannot downgrade"):
             command.downgrade(config, "0008")
 
@@ -725,8 +729,8 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
             revision = connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
-            assert revision in {"0012", "0014", "0016", "0017", "0018", "0019"}, (
-                f"Unexpected revision after rejected downgrade: {revision}"
+            assert revision == revision_before, (
+                f"Rejected downgrade changed revision: {revision_before} -> {revision}"
             )
 
         with migration_engine.connect() as connection:
