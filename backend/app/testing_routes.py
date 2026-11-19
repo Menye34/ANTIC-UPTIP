@@ -147,3 +147,67 @@ def execution_details(assessment_id: UUID, execution_id: UUID,
                               'partial': o.is_partial, 'evidence_id': o.evidence_id} for o in observations],
             'events': [{'id': e.id, 'event': e.event_type, 'reason_code': e.reason_code,
                         'occurred_at': e.occurred_at, 'attempt_id': e.attempt_id} for e in events]}
+
+
+# Recommendations — read-only endpoints.
+
+@router.get('/recommendations')
+def list_recommendations(
+    assessment_id: UUID,
+    user: User = Depends(analyst),
+    db: Session = Depends(get_db),
+):
+    from .testing_completion_service import recommendation_state
+    return recommendation_state(db, assessment_id, user)
+
+
+@router.get('/recommendations/{recommendation_id}/eligibility')
+def recommendation_eligibility(
+    assessment_id: UUID,
+    recommendation_id: str,
+    user: User = Depends(analyst),
+    db: Session = Depends(get_db),
+):
+    from .recommendation_eligibility import evaluate_recommendation
+
+    assessment_for(db, assessment_id, user)
+
+    observations = db.scalars(
+        select(SecurityObservation).where(
+            SecurityObservation.assessment_id == assessment_id
+        ).order_by(
+            SecurityObservation.collected_at,
+            SecurityObservation.id,
+        )
+    ).all()
+
+    result = evaluate_recommendation(recommendation_id, observations)
+
+    if result['reason_code'] == 'invalid_recommendation_id':
+        raise HTTPException(422, detail='Invalid recommendation identifier')
+
+    if result['reason_code'] == 'recommendation_not_current':
+        raise HTTPException(404, detail='Recommendation unavailable')
+
+    return {'assessment_id': assessment_id, **result}
+
+
+@router.get('/recommendations/{recommendation_id}/authorization-review')
+def recommendation_authorization_review(
+    assessment_id: UUID,
+    recommendation_id: str,
+    user: User = Depends(analyst),
+    db: Session = Depends(get_db),
+):
+    from .recommendation_authorization_review import review_authorization
+
+    assessment = assessment_for(db, assessment_id, user)
+    result = review_authorization(db, assessment, recommendation_id)
+
+    if result['reason_code'] == 'invalid_recommendation_id':
+        raise HTTPException(422, detail='Invalid recommendation identifier')
+
+    if result['reason_code'] == 'recommendation_not_current':
+        raise HTTPException(404, detail='Recommendation unavailable')
+
+    return {'assessment_id': assessment_id, **result}
