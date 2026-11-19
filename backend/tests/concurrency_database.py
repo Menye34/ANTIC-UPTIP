@@ -21,13 +21,15 @@ def recreate_concurrency_database():
 
     url = make_url(raw_url)
 
-    if (
-        url.drivername != "postgresql+psycopg"
-        or url.host not in {"127.0.0.1", "::1"}
-        or url.database != SOURCE
-        or url.query
+    if not (
+        url.drivername == "postgresql+psycopg"
+        and url.host == "127.0.0.1"
+        and url.port == 5433
+        and url.username == "uptip"
+        and url.database == SOURCE
+        and not url.query
     ):
-        raise RuntimeError("Unsafe PostgreSQL configuration")
+        raise RuntimeError("Unsafe PostgreSQL test configuration")
 
     admin_url = url.set(database="postgres")
 
@@ -39,6 +41,11 @@ def recreate_concurrency_database():
 
     try:
         with engine.connect() as connection:
+            cluster = connection.scalar(text("SHOW cluster_name"))
+
+            if cluster != "18/uptip_test":
+                raise RuntimeError("Unexpected PostgreSQL cluster")
+
             rows = connection.execute(
                 text("""
                     SELECT
@@ -59,7 +66,7 @@ def recreate_concurrency_database():
                 for name, owner, description in rows
             }
 
-            expected_owner = url.username
+            expected_owner = "uptip"
 
             if databases.get(SOURCE) != (
                 expected_owner,
@@ -67,29 +74,37 @@ def recreate_concurrency_database():
             ):
                 raise RuntimeError("Source database verification failed")
 
-            if databases.get(DESTINATION) != (
+            destination = databases.get(DESTINATION)
+
+            if destination is not None and destination != (
                 expected_owner,
                 DESTINATION_COMMENT,
             ):
-                raise RuntimeError("Destination database verification failed")
+                raise RuntimeError(
+                    "Destination database verification failed"
+                )
 
             active = connection.scalar(
                 text("""
                     SELECT COUNT(*)
                     FROM pg_stat_activity
-                    WHERE datname = :destination
+                    WHERE datname IN (:source, :destination)
                 """),
-                {"destination": DESTINATION},
+                {
+                    "source": SOURCE,
+                    "destination": DESTINATION,
+                },
             )
 
             if active:
                 raise RuntimeError(
-                    "Concurrency database has active connections"
+                    "Source or destination database has active connections"
                 )
 
-            connection.exec_driver_sql(
-                f'DROP DATABASE "{DESTINATION}"'
-            )
+            if destination is not None:
+                connection.exec_driver_sql(
+                    f'DROP DATABASE "{DESTINATION}"'
+                )
 
             connection.exec_driver_sql(
                 f'CREATE DATABASE "{DESTINATION}" '
@@ -97,7 +112,7 @@ def recreate_concurrency_database():
             )
 
             connection.exec_driver_sql(
-                f"COMMENT ON DATABASE \"{DESTINATION}\" "
+                f'COMMENT ON DATABASE "{DESTINATION}" '
                 f"IS '{DESTINATION_COMMENT}'"
             )
 

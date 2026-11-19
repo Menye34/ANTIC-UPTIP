@@ -626,11 +626,17 @@ def test_migration_preserves_draft_and_refuses_downgrade_after_start(
             str(Path(__file__).resolve().parents[1] / "alembic.ini")
         )
 
-        # Create only a Draft assessment before the migration cycle.
-        draft_user = add_analyst(
-            migration_db, "migration-draft-" + uuid4().hex[:12]
-        )
-        draft_headers = sign_in(migration_client, draft_user.username)
+        # Create the test analyst through the privileged migration role.
+        # Application requests continue through the restricted runtime role.
+        from sqlalchemy.orm import Session
+
+        with Session(migration_engine, expire_on_commit=False) as setup_db:
+            draft_user = add_analyst(
+                setup_db, "migration-draft-" + uuid4().hex[:12]
+            )
+            draft_username = draft_user.username
+
+        draft_headers = sign_in(migration_client, draft_username)
         draft_response = migration_client.post(
             API,
             headers=draft_headers,
