@@ -223,3 +223,6 @@
 .testing-service-form select, .testing-service-form input:not([type="checkbox"]) { width: 100%; min-height: 40px; border: 1px solid var(--dash-border); border-radius: 6px; padding: 8px 12px; background: white; color: var(--dash-text); font: inherit; }
 .testing-service-form .testing-service-consent { display: flex; align-items: start; gap: 10px; }
 .testing-service-actions { display: flex; justify-content: end; flex-wrap: wrap; gap: 12px; }
+
+/* A completed review has one primary action, not a secondary cancel action. */
+.testing-completion-actions > button.analyst-create:only-child { background: var(--dash-primary, #2563eb); color: #fff; border-color: transparent; }
