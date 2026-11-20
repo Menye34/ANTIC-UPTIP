@@ -110,6 +110,7 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
     <header className="findings-heading"><div><h1>Findings</h1>
       <p>Explore consolidated security findings, inspect supporting evidence, and prepare findings for reporting.</p></div>
       <button type="button" className="analyst-create" onClick={() => setManualOpen(true)}>+ Add Manual Finding</button></header>
+    {!inReview && <p className="findings-lifecycle" role="status">This assessment has not yet reached Finding Review. Current status: {assessment.status}.</p>}
     <div className="findings-metrics">{(['Total Findings', ...levels] as const).map(label => {
       const count = label === 'Total Findings' ? findings.length : findings.filter(f => f.severity === label).length
       return <section className="analyst-card" key={label}><span>{label}</span><strong>{count}</strong>
@@ -128,7 +129,7 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
             <option value="">Source</option>{sources.map(item => <option key={item}>{item}</option>)}</select></label></div>
         <div className="findings-table-scroll"><table><thead><tr><th>Finding</th><th>Affected Target</th><th>Severity</th><th>Source</th><th>Action</th></tr></thead>
           <tbody>{filtered.map(f => <tr key={f.id}><td><strong>{f.title}</strong></td><td>{f.affectedTarget}</td>
-            <td>{f.severity}</td><td>{f.source}</td><td><button type="button" className="findings-text-button" onClick={() => onFinding?.(f.id)}>View Details</button></td></tr>)}</tbody></table></div>
+            <td>{f.severity}</td><td>{f.source}</td><td><button type="button" className="findings-text-button" disabled={!onFinding} onClick={() => onFinding?.(f.id)}>View Details</button></td></tr>)}</tbody></table></div>
         {filtered.length === 0 && <p role="status">No findings match your filters.</p>}
         <footer className="findings-list-footer"><span>Showing {filtered.length} of {findings.length} findings</span>
           <button type="button" disabled title="Report integration is not available yet">Go to Report →</button></footer>
