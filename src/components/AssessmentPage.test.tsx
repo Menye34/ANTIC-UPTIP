@@ -543,19 +543,27 @@ describe('Assessment Targets after Start', () => {
 
 describe('Finding Review navigation', () => {
   it('renders the assessment-scoped Findings route and navigates back to Testing', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response({ ...assessment, status: 'Testing' })))
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => response(url.endsWith('/findings')
+      ? { assessment_id: assessment.id, lifecycle_status: 'Testing', total: 0,
+          counts: { Critical: 0, High: 0, Medium: 0, Low: 0 }, findings: [] }
+      : { ...assessment, status: 'Testing' })))
     const { navigate } = renderPage(draftPath + '/findings')
     expect(await screen.findByRole('heading', { name: 'Findings' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: 'Go to Testing' })).toBeVisible()
     expect(screen.getByRole('link', { name: 'Findings' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('link', { name: 'Testing' })).not.toHaveAttribute('aria-current', 'page')
     fireEvent.click(screen.getByRole('button', { name: 'Go to Testing' }))
     expect(navigate).toHaveBeenCalledWith(draftPath + '/testing')
   })
   it('keeps the assessment ID when opening a nested finding detail URL', async () => {
-    const fetcher = vi.fn(async () => response({ ...assessment, status: 'Finding Review' }))
+    const fetcher = vi.fn(async (url: string) => url.endsWith('/findings/synthetic-finding')
+      ? response({}, 404) : url.endsWith('/findings')
+        ? response({ assessment_id: assessment.id, lifecycle_status: 'Finding Review', total: 0,
+            counts: { Critical: 0, High: 0, Medium: 0, Low: 0 }, findings: [] })
+        : response({ ...assessment, status: 'Finding Review' }))
     vi.stubGlobal('fetch', fetcher)
     const { navigate } = renderPage(draftPath + '/findings/synthetic-finding')
-    expect(await screen.findByRole('heading', { name: 'Finding unavailable' })).toBeVisible()
+    expect(await screen.findByText('Finding unavailable for this assessment.')).toBeVisible()
     expect(fetcher).toHaveBeenCalledWith(api + '/' + assessment.id, expect.anything())
     fireEvent.click(screen.getByRole('button', { name: /Back to Findings/ }))
     expect(navigate).toHaveBeenCalledWith(draftPath + '/findings')
