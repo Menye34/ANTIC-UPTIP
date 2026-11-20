@@ -226,7 +226,7 @@ export default function AssessmentPage(props: AssessmentPageProps) {
     initials={props.username.slice(0, 2).toUpperCase()} signingOut={props.signingOut} onSignOut={props.onSignOut}>
     <main className={testing || findings ? 'analyst-content testing-content' : create ? 'analyst-content' : 'analyst-content assessment-overview'}>
       {props.logoutFailed && <p role="alert">Unable to sign out. Please try again.</p>}
-      {testing ? <TestingPage key={props.path} assessmentId={props.path.split('/').at(-2)!} csrfToken={props.csrfToken} onExpired={props.onExpired} onFindings={() => props.navigate(props.path.replace(/\/testing$/, '/findings'))} />
+      {testing ? <TestingPage key={props.path} currentAnalyst={{ id: props.userId, username: props.username }} assessmentId={props.path.split('/').at(-2)!} csrfToken={props.csrfToken} onExpired={props.onExpired} onFindings={() => props.navigate(props.path.replace(/\/testing$/, '/findings'))} />
         : findings ? <FindingsPage assessmentId={props.path.split('/').at(-2)!} onExpired={props.onExpired} onTesting={() => props.navigate(props.path.replace(/\/findings$/, '/testing'))} />
         : create ? <CreateForm {...props} /> : scopeOverview && targets ? <AssessmentTargets overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} navigate={props.navigate} />
         : scopeOverview ? <AuthorizedScope overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} /> : <Overview {...props} />}
