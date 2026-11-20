@@ -222,7 +222,7 @@ export default function AssessmentPage(props: AssessmentPageProps) {
   const testing = props.path.endsWith('/testing')
   const findings = props.path.endsWith('/findings')
   const scopeOverview = /\/(scope|targets)$/.test(props.path) ? props.path.replace(/\/(scope|targets)$/, '') : undefined
-  return <AnalystShell testingPath={testing ? props.path : undefined} targetsActive={targets} scopeOverview={scopeOverview} sidebar={testing || findings || create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
+  return <AnalystShell testingPath={testing ? props.path : undefined} findingsPath={findings ? props.path : undefined} targetsActive={targets} scopeOverview={scopeOverview} sidebar={testing || findings || create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
     initials={props.username.slice(0, 2).toUpperCase()} signingOut={props.signingOut} onSignOut={props.onSignOut}>
     <main className={testing || findings ? 'analyst-content testing-content' : create ? 'analyst-content' : 'analyst-content assessment-overview'}>
       {props.logoutFailed && <p role="alert">Unable to sign out. Please try again.</p>}
