@@ -33,7 +33,7 @@ export default function AnalystShell({ children, displayName, initials, signingO
       <div className="analyst-logo"><img src={testingPath || findingsPath ? testingShield : shield} alt="" />UPTIP</div>
       <nav aria-label="Analyst workspace">
         {navigation.map(([label, icon], index) => index === 0
-          ? <a href="/analyst/dashboard" aria-current={createActive || scopeOverview || testingPath ? undefined : "page"} key={label}><img src={icon} alt="" />{label}</a>
+          ? <a href="/analyst/dashboard" aria-current={createActive || scopeOverview || testingPath || findingsPath ? undefined : "page"} key={label}><img src={icon} alt="" />{label}</a>
           : (testingPath || findingsPath) && index === 2 ? <div className="analyst-assessment-nav" key={label}>
             <details><summary><img src={icon} alt="" />Scope &amp; Targets</summary>
               <a href={(testingPath || findingsPath)!.replace(/\/(testing|findings)$/, '/scope')}>Authorized Scope</a>
