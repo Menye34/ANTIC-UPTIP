@@ -170,7 +170,9 @@ def test_invalid_response_contract_is_rejected(alter):
 
 
 @pytest.fixture
-def completed_work(client, db, prepared, tmp_path):
+def completed_work(client, db, prepared, tmp_path, monkeypatch):
+    from recommendation_fixtures import mock_recommendations
+    mock_recommendations(monkeypatch)
     path, headers, owner = prepared
     started = confirm(client, path, headers, get_review(client, path)['start_review'])
     assert started.status_code == 201
@@ -375,8 +377,8 @@ def test_shared_classification_preserves_completion_statistics(decision):
     from app.testing_completion_service import decision_statistics, recommendation_statistics
     from app.recommendation_planner import plan_recommendations
     observation = {'id': 'observation', 'target_id': 'target', 'evidence_id': 'evidence',
-                   'observation_type': 'host_discovery', 'is_partial': False,
-                   'data': {'address': '192.0.2.1', 'status': 'up'},
+                   'observation_type': 'service_discovery', 'is_partial': False,
+                   'data': {'address': '192.0.2.1', 'state':'open', 'port':443,'transport':'tcp','service':'https'},
                    'collected_at': datetime.now(timezone.utc)}
     planned = plan_recommendations([SimpleNamespace(**observation)])
     decisions = [] if decision is None else [{'recommendation_id': planned[0]['id'], 'decision': decision}]

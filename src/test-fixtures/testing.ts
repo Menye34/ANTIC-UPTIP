@@ -60,3 +60,16 @@ export function completedCompletionReview(): CompletionReview {
       actor_id: 'synthetic-completion-actor', snapshot: structuredClone(initial.summary) as unknown as Record<string, unknown>,
       snapshot_schema_version: 1, snapshot_digest: null } }
 }
+
+export function intelligentRecommendationData(outcome: 'Accepted' | 'Rejected' | null = null) {
+  const legacy = recommendationData(outcome ? 'Reviewed' : null)
+  return { ...legacy, recommendations: [{ ...legacy.recommendations[0], kind: 'evidence_followup' as const,
+    title: 'HTTP Server Assessment', target: '192.0.2.1', service: 'https', port: 443,
+    context_digest: 'a'.repeat(64), review_outcome: outcome,
+    explanation: ['HTTPS service was observed on 192.0.2.1:443.', 'Service identification did not verify server configuration.', 'Nikto is proposed for server assessment; integration is pending.'],
+    suggested_test: 'HTTP Server Assessment', suggested_tool: 'Nikto',
+    tool_integration_status: 'pending_integration' as const, execution_status: 'pending_integration' as const,
+    execution_unavailability_reason: 'tool_integration_pending',
+    proposed_test: { id: 'http-server-assessment', version: 1, name: 'HTTP Server Assessment', tool: 'Nikto',
+      description: 'Assess an evidenced HTTP server.', profile_id: null, definition_digest: 'b'.repeat(64) } }] }
+}

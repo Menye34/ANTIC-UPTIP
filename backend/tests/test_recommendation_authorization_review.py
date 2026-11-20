@@ -12,8 +12,8 @@ def fixture(status='Testing', scope_status='in_scope'):
         normalized_value='192.0.2.10', kind='IP address', scope_revision=3,
         scope_status=scope_status, revision=2)
     observation = SimpleNamespace(id=uuid4(), target_id=target.id, evidence_id=uuid4(),
-        observation_type='host_discovery', is_partial=False,
-        data={'status': 'up', 'address': '192.0.2.10'})
+        observation_type='service_discovery', is_partial=False,
+        data={'state':'open', 'address':'192.0.2.10', 'port':443,'transport':'tcp','service':'https'})
     from app.recommendation_planner import plan_recommendations
     recommendation_id = plan_recommendations([observation])[0]['id']
     db = SimpleNamespace()
@@ -27,7 +27,7 @@ def test_review_remains_non_authorizing_even_when_scope_matches():
     with patch('app.recommendation_authorization_review.scope_entries',
                return_value=[('192.0.2.10', 'IP address')]):
         result = review_authorization(db, assessment, recommendation_id)
-    assert result['reason_code'] == 'followup_profile_not_supported'
+    assert result['reason_code'] == 'tool_integration_pending'
     assert result['eligible'] is False
     assert result['authorization_available'] is False
     assert result['execution_available'] is False

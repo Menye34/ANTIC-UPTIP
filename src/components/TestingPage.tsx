@@ -1,4 +1,5 @@
 import TestingCompletion from './TestingCompletion'
+import { decideRecommendation } from '../services/testingCompletion'
 import type { CompletionOperation } from './TestingCompletion'
 import clock from '../assets/testing/Clock.svg'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -177,7 +178,8 @@ function AlternativeReview({ assessmentId, recommendation, onExpired }: {
     })
     return () => controller.abort()
   }, [assessmentId, recommendation.id, onExpired, retry])
-  const explanation = reason === 'followup_profile_not_supported'
+  const explanation = reason === 'tool_integration_pending' ? 'The proposed tool integration is pending; no executable alternative is available.'
+    : reason === 'followup_profile_not_supported'
     ? 'No supported follow-up test profile is available for this recommendation.'
     : reason === 'assessment_not_testing' ? 'This assessment is no longer in Testing.'
     : ['target_scope_stale', 'target_out_of_scope', 'observation_target_mismatch', 'target_unavailable'].includes(reason)
@@ -186,7 +188,7 @@ function AlternativeReview({ assessmentId, recommendation, onExpired }: {
   return <>
     <section className="testing-alternative-current" aria-label="Current Recommendation"><h3>Current Recommendation</h3>
       <div className="testing-inset"><p className="testing-field-label">Test</p><h4>{recommendation.title}</h4>
-        <p className="testing-field-label">Tool</p><p>Not available</p><SuggestionFields recommendation={recommendation} /></div>
+        <p className="testing-field-label">Tool</p><p>{recommendation.suggested_tool ?? 'Not available'}</p><SuggestionFields recommendation={recommendation} /></div>
     </section>
     <section aria-label="Select Alternative"><h3>Select Alternative</h3>
       <p>Choose an integrated security tool and one of its configured test profiles.</p>
@@ -207,10 +209,35 @@ function AlternativeReview({ assessmentId, recommendation, onExpired }: {
   </>
 }
 
-function RecommendationReview({ assessmentId, recommendation, onClose, onExpired }: {
-  assessmentId: string; recommendation: Recommendation; onClose: () => void; onExpired: () => void
+function RecommendationReview({ assessmentId, recommendation, onClose, onExpired, csrfToken, onChanged }: {
+  assessmentId: string; recommendation: Recommendation; onClose: () => void; onExpired: () => void; csrfToken: string; onChanged: () => void
 }) {
   const [choosingAlternative, setChoosingAlternative] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [decisionError, setDecisionError] = useState('')
+  const [uncertain, setUncertain] = useState(false)
+  const pending = useRef(false)
+  const decisionController = useRef<AbortController | null>(null)
+  useEffect(() => () => decisionController.current?.abort(), [])
+  async function decide(outcome: 'Accepted' | 'Rejected') {
+    if (pending.current || uncertain || !csrfToken) return
+    pending.current = true; setSaving(true); setDecisionError('')
+    const controller = new AbortController(); decisionController.current = controller
+    try {
+      await decideRecommendation(assessmentId, recommendation.id, 'Reviewed', csrfToken, controller.signal, outcome)
+      const verified = await getRecommendations(assessmentId, controller.signal)
+      if (verified.recommendations.find(item => item.id === recommendation.id)?.review_outcome !== outcome) throw new Error('Review not verified')
+      if (!controller.signal.aborted) { onChanged(); onClose() }
+    } catch (failure) {
+      if (controller.signal.aborted) return
+      if (failure instanceof AssessmentStartError && failure.status === 401) onExpired()
+      const unknown = !(failure instanceof AssessmentStartError) || failure.status >= 500 || [408,429].includes(failure.status)
+      setUncertain(unknown)
+      setDecisionError(unknown ? 'Review outcome is unverified. Close and refresh recommendations before another decision.' : 'The decision was not saved. Refresh the current assessment before retrying.')
+      onChanged()
+    } finally { if (!controller.signal.aborted) { pending.current=false;setSaving(false) } }
+  }
+
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -221,28 +248,36 @@ function RecommendationReview({ assessmentId, recommendation, onClose, onExpired
     return () => { element?.close(); if (trigger?.isConnected) trigger.focus() }
   }, [])
   return <dialog ref={dialog} className="testing-review-dialog" aria-labelledby="recommendation-review-title"
-    onCancel={event => { event.preventDefault(); onClose() }}>
+    onCancel={event => { event.preventDefault(); if (!saving) onClose() }}>
     <header className="testing-review-header"><h2 id="recommendation-review-title">{choosingAlternative ? 'Choose Alternative' : 'Review Recommendation'}</h2>
-      <button ref={closeButton} type="button" aria-label="Close recommendation review" onClick={onClose}>×</button></header>
+      <button ref={closeButton} type="button" aria-label="Close recommendation review" disabled={saving} onClick={onClose}>×</button></header>
     <div className="testing-review-body">
       {choosingAlternative ? <AlternativeReview assessmentId={assessmentId} recommendation={recommendation} onExpired={onExpired} /> : <>
-        <section aria-label="Selected Suggestion"><h3>{recommendation.title}</h3><span className="testing-recommendation-status">{recommendation.decision === null && <img src={clock} alt="" />}{recommendation.decision ?? 'Pending Review'}</span></section>
+        <section aria-label="Selected Suggestion"><h3>{recommendation.title}</h3><span className="testing-recommendation-status">{recommendation.decision === null && <img src={clock} alt="" />}{recommendation.decision === 'Reviewed' ? recommendation.review_outcome ?? 'Reviewed' : recommendation.decision ?? 'Pending Review'}</span></section>
         <section aria-label="Suggestion Information"><h3>Suggestion Information</h3><SuggestionFields recommendation={recommendation} /></section>
-        <section><h3>Why Is This Suggested?</h3><p>{recommendation.reason}</p></section>
+        <section><h3>Why Is This Suggested?</h3>{(recommendation.explanation ?? [recommendation.reason]).map((text, index) => <p key={index}>{text}</p>)}</section>
         <section aria-label="Source Test"><h3>Source Test</h3><dl className="testing-review-fields testing-three-fields">
           <div><dt>Test</dt><dd>{recommendation.source_test?.test_name ?? 'Not available'}</dd></div>
           <div><dt>Tool</dt><dd>{recommendation.source_test?.tool ?? 'Not available'}</dd></div>
           <div><dt>Status</dt><dd>{recommendation.source_test
             ? <span className="testing-state testing-status-badge" data-status={recommendation.source_test.status}>{recommendation.source_test.status}</span> : 'Not available'}</dd></div>
         </dl></section>
-        <section aria-label="Proposed Test"><h3>Proposed Test</h3><p>No executable follow-up test is currently supported for this observation.</p></section>
+        <section aria-label="Proposed Test"><h3>Proposed Test</h3>{recommendation.proposed_test ? <>
+          <h4>{recommendation.proposed_test.name}</h4><p>Tool: {recommendation.proposed_test.tool}</p>
+          <p>{recommendation.proposed_test.description}</p><p role="status">Integration pending — execution unavailable. Acceptance records review only.</p>
+        </> : <p>No executable follow-up test is currently supported for this observation.</p>}</section>
       </>}
     </div>
+    {decisionError && <p role="alert">{decisionError}</p>}
     <footer className="testing-review-footer">{choosingAlternative ? <>
       <button type="button" onClick={() => setChoosingAlternative(false)}>Cancel</button>
       <button type="button" disabled>Confirm Alternative</button>
-    </> : <><button type="button" onClick={onClose}>Close</button><button type="button" disabled>Start Test</button>
-      <button type="button" onClick={() => setChoosingAlternative(true)}>Choose Alternative</button></>}
+    </> : <><button type="button" disabled={saving} onClick={onClose}>Close</button>
+      {recommendation.kind === 'evidence_followup' ? <>
+        <button type="button" disabled={!csrfToken || saving || uncertain} onClick={() => void decide('Accepted')}>{saving ? 'Saving…' : 'Accept'}</button>
+        <button type="button" disabled={!csrfToken || saving || uncertain} onClick={() => void decide('Rejected')}>Reject</button>
+      </> : <button type="button" disabled>Start Test</button>}
+      <button type="button" disabled={saving} onClick={() => setChoosingAlternative(true)}>Choose Alternative</button></>}
     </footer>
   </dialog>
 }
@@ -300,7 +335,6 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
   const hasTestingData = data !== undefined
   const invalidateRecommendations = useCallback(() => {
     recommendationGeneration.current += 1
-    setRecommendations(undefined)
     setRecommendationError('')
     setRecommendationRetry(n => n + 1)
   }, [])
@@ -372,11 +406,11 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
           {recommendations?.count === 0 && !recommendationError && <div className="testing-recommendations-empty">
             <div className="testing-recommendations-empty-icon" aria-hidden="true">⌕</div>
             <h3>No suggested next steps yet</h3>
-            <p>No recommendations are available for this assessment yet. Suggested next steps will appear here when supported analysis is available.</p>
+            <p>No recommendations are available for this assessment yet. Suggested next steps will appear here when supported analysis is available. Host discovery alone does not identify services or web applications.</p>
           </div>}
           {recommendations && recommendations.count > 0 && <div className="testing-recommendation-list">
             {recommendations.recommendations.map(item => <article className="testing-recommendation-item" key={item.id}>
-              <div className="testing-recommendation-title"><h3>{item.title}</h3><span className="testing-recommendation-status">{item.decision === null && <img src={clock} alt="" />}{item.decision ?? 'Pending Review'}</span></div>
+              <div className="testing-recommendation-title"><h3>{item.title}</h3><span className="testing-recommendation-status">{item.decision === null && <img src={clock} alt="" />}{item.decision === 'Reviewed' ? item.review_outcome ?? 'Reviewed' : item.decision ?? 'Pending Review'}</span></div>
               <SuggestionFields recommendation={item} />
               <p className="testing-recommendation-reason">{item.reason}</p>
 
@@ -442,7 +476,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
       </>}
       </>}
     </div>}
-    {reviewedRecommendation && recommendations?.recommendations.some(item => item.id === reviewedRecommendation) && <RecommendationReview assessmentId={assessmentId} onExpired={onExpired}
+    {reviewedRecommendation && recommendations?.recommendations.some(item => item.id === reviewedRecommendation) && <RecommendationReview assessmentId={assessmentId} onExpired={onExpired} csrfToken={csrfToken} onChanged={invalidateRecommendations}
       recommendation={recommendations.recommendations.find(item => item.id === reviewedRecommendation)!}
       onClose={() => setReviewedRecommendation(undefined)} />}
     {selected && <Details key={assessmentId + ':' + selected} assessmentId={assessmentId} executionId={selected} onExpired={onExpired}

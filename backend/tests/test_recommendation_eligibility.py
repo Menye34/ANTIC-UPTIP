@@ -9,8 +9,8 @@ from app.recommendation_planner import plan_recommendations
 def observed(status='up', partial=False):
     return SimpleNamespace(
         id=uuid4(), target_id=uuid4(), evidence_id=uuid4(),
-        observation_type='host_discovery', is_partial=partial,
-        data={'status': status, 'address': '192.0.2.10'},
+        observation_type='service_discovery', is_partial=partial,
+        data={'state': 'open' if status=='up' else 'closed', 'address': '192.0.2.10', 'port':443, 'transport':'tcp','service':'https'},
     )
 
 
@@ -18,7 +18,7 @@ def test_known_recommendation_remains_non_executable():
     source = observed()
     recommendation_id = plan_recommendations([source])[0]['id']
     result = evaluate_recommendation(recommendation_id, [source])
-    assert result['reason_code'] == 'followup_profile_not_supported'
+    assert result['reason_code'] == 'tool_integration_pending'
     assert result['eligible'] is False
     assert result['authorization_available'] is False
     assert result['execution_available'] is False

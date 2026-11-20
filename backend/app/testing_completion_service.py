@@ -1,5 +1,5 @@
 """Assessment-scoped completion reads and calculations; no execution authority."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -12,8 +12,8 @@ from pydantic import ValidationError
 from .assessment_routes import accessible
 from .models import (Assessment, BaselineExecutionRequest, ExecutionAttempt,
                      ResultProcessingOutcome, SecurityObservation,
-                     TestingRecommendationDecision, TestingCompletionEvent, ScannerEvidence)
-from .recommendation_planner import plan_recommendations
+                     TestingRecommendationDecision, TestingCompletionEvent, ScannerEvidence, RecommendationReviewEvent)
+from .recommendation_planner import plan_recommendations, carry_deferred_legacy
 from .security import can_activate
 
 VERSION = 2
@@ -34,6 +34,7 @@ class CompletionState:
     observations: list
     decisions: list
     receipt: dict | None
+    review_events: list = field(default_factory=list)
 
 
 def aggregate(model, fields):
@@ -59,6 +60,7 @@ def load_state(db, assessment_id, user):
                                         'processed_at')).label('observations'),
         aggregate(TestingRecommendationDecision, ('recommendation_id', 'actor_id', 'decision',
                                                    'decided_at')).label('decisions'),
+        aggregate(RecommendationReviewEvent, ('id','recommendation_id','actor_id','outcome','revision','decided_at')).label('review_events'),
         select(func.json_build_object('actor_id', TestingCompletionEvent.actor_id,
                                       'completed_at', TestingCompletionEvent.completed_at,
                                       'snapshot', TestingCompletionEvent.snapshot))
@@ -70,7 +72,7 @@ def load_state(db, assessment_id, user):
         raise HTTPException(404)
     return CompletionState(str(row['id']), row['name'], row['status'], str(row['creator_id']),
                            row['scope_revision'], row['executions'] or [], row['attempts'] or [],
-                           row['processing'] or [], row['observations'] or [], row['decisions'] or [], row['receipt'])
+                           row['processing'] or [], row['observations'] or [], row['decisions'] or [], row['receipt'], row['review_events'] or [])
 
 
 def lock_inputs(db, assessment_id):
@@ -98,7 +100,8 @@ def decision_statistics(suggestions, decisions):
 
 def recommendation_statistics(observations, decisions):
     ordered = sorted(observations, key=lambda item: (utc(item['collected_at']), item['id']))
-    suggestions = plan_recommendations([SimpleNamespace(**item) for item in ordered])
+    objects = [SimpleNamespace(**item) for item in ordered]
+    suggestions = carry_deferred_legacy(objects, decisions, plan_recommendations(objects))
     items, pending, counts = decision_statistics(suggestions, decisions)
     return [{key: item[key] for key in ('id', 'title', 'decision')} for item in items], pending, counts
 
@@ -106,7 +109,7 @@ def recommendation_statistics(observations, decisions):
 def recommendation_state(db, assessment_id, user):
     """Access, observations, decisions and validated provenance in one MVCC read."""
     sources = (select(func.json_agg(func.json_build_object(
-        'observation_id', SecurityObservation.id, 'test_name', BaselineExecutionRequest.activity,
+        'observation_id', SecurityObservation.id, 'execution_id', BaselineExecutionRequest.id, 'test_name', BaselineExecutionRequest.activity,
         'tool', BaselineExecutionRequest.tool, 'status', BaselineExecutionRequest.status)))
         .select_from(SecurityObservation).join(ScannerEvidence, and_(
             ScannerEvidence.id == SecurityObservation.evidence_id,
@@ -117,29 +120,42 @@ def recommendation_state(db, assessment_id, user):
             BaselineExecutionRequest.id == SecurityObservation.request_id,
             BaselineExecutionRequest.assessment_id == Assessment.id,
             BaselineExecutionRequest.target_id == SecurityObservation.target_id))
-        .where(SecurityObservation.assessment_id == Assessment.id).correlate(Assessment).scalar_subquery())
+        .join(ResultProcessingOutcome, and_(ResultProcessingOutcome.id == SecurityObservation.processing_id,
+            ResultProcessingOutcome.evidence_id == SecurityObservation.evidence_id,
+            ResultProcessingOutcome.assessment_id == Assessment.id))
+        .where(SecurityObservation.assessment_id == Assessment.id,
+               BaselineExecutionRequest.status == 'Completed', ResultProcessingOutcome.status == 'Succeeded',
+               ResultProcessingOutcome.is_partial.is_(False), ScannerEvidence.is_partial.is_(False))
+        .correlate(Assessment).scalar_subquery())
     row = db.execute(select(
         Assessment.id,
         aggregate(SecurityObservation, ('id', 'target_id', 'evidence_id', 'observation_type',
                                         'data', 'is_partial', 'collected_at')).label('observations'),
         aggregate(TestingRecommendationDecision, ('recommendation_id', 'decision')).label('decisions'),
         sources.label('sources'),
+        aggregate(RecommendationReviewEvent, ('id','recommendation_id','outcome','decided_at','revision')).label('review_events'),
     ).where(Assessment.id == assessment_id, accessible(user))).mappings().one_or_none()
     if row is None:
         raise HTTPException(404)
-    observations = sorted(row['observations'] or [], key=lambda item: (utc(item['collected_at']), item['id']))
-    suggestions = plan_recommendations([SimpleNamespace(**item) for item in observations])
+    source_by_id = {item['observation_id']: item for item in row['sources'] or []}
+    observations = sorted([item for item in row['observations'] or [] if item['id'] in source_by_id], key=lambda item: (utc(item['collected_at']), item['id']))
+    objects = [SimpleNamespace(**item) for item in observations]
+    suggestions = carry_deferred_legacy(objects, row['decisions'] or [], plan_recommendations(objects))
     items, _, counts = decision_statistics(suggestions, row['decisions'] or [])
     # PostgreSQL JSON consistently represents UUIDs as strings on both sides.
     source_by_id = {item['observation_id']: item for item in row['sources'] or []}
+    outcomes = {event['recommendation_id']: event['outcome'] for event in sorted(
+        row['review_events'] or [], key=lambda event: event['revision'])}
     for item in items:
+        item['review_outcome'] = outcomes.get(item['id'])
         source = source_by_id.get(item['source_observation_id'])
-        item['source_test'] = ({key: source[key] for key in ('test_name', 'tool', 'status')}
+        item['source_test'] = ({key: source[key] for key in ('test_name', 'tool', 'status', 'execution_id')}
                                if source is not None else None)
     from .testing_completion_schemas import DecisionCounts
     DecisionCounts.model_validate(counts)
     return {'assessment_id': str(row['id']), 'count': len(items), 'recommendations': items,
-            'decision_counts': counts, 'execution_authorized': False}
+            'decision_counts': counts, 'execution_authorized': False, 'planner_version': 2,
+            'no_recommendation_reason': 'insufficient_supported_evidence' if not items else None}
 
 
 def calculate_summary(state):
@@ -154,7 +170,13 @@ def calculate_summary(state):
     pending_processing = sum(item['status'] in ('Pending', 'Processing') for item in state.processing)
     successful = {item['request_id'] for item in state.processing if item['status'] == 'Succeeded'}
     missing = sum(item['status'] == 'Completed' and item['id'] not in successful for item in state.executions)
-    recommendations, pending, decisions = recommendation_statistics(state.observations, state.decisions)
+    completed_ids = {item['id'] for item in state.executions if item['status'] == 'Completed'}
+    valid_processing = {item['id']: item for item in state.processing
+                        if item['status'] == 'Succeeded' and not item.get('is_partial', False)}
+    trusted = [item for item in state.observations if item.get('request_id') in completed_ids
+               and item.get('processing_id') in valid_processing
+               and item.get('evidence_id') == valid_processing[item['processing_id']].get('evidence_id')]
+    recommendations, pending, decisions = recommendation_statistics(trusted, state.decisions)
     blockers, details = [], []
     def block(code, message, count=None, action=None):
         blockers.append(code)
@@ -218,6 +240,9 @@ def snapshot_inputs(state):
                 item['data_digest'] = canonical_digest(item.pop('data'))
             values.append(item)
         groups[name] = sorted(values, key=lambda item: item[sort_key])
+    if state.review_events:
+        groups['review_events'] = sorted([{**event, 'decided_at': utc(event['decided_at'])}
+            for event in state.review_events], key=lambda event: event['id'])
     return {'schema_version': VERSION, 'assessment_id': state.assessment_id,
             'lifecycle_status': state.lifecycle, 'creator_id': state.creator_id,
             'scope_revision': state.scope_revision, **groups}
@@ -261,3 +286,17 @@ def receipt_snapshot(review, state):
         'schema_version': VERSION, 'snapshot_digest': review['snapshot_digest'],
         'inputs': snapshot_inputs(state),
     }}
+
+
+def trusted_recommendation_observations(db, assessment_id):
+    return db.scalars(select(SecurityObservation)
+        .join(ScannerEvidence, ScannerEvidence.id == SecurityObservation.evidence_id)
+        .join(ResultProcessingOutcome, ResultProcessingOutcome.id == SecurityObservation.processing_id)
+        .join(BaselineExecutionRequest, BaselineExecutionRequest.id == SecurityObservation.request_id)
+        .where(SecurityObservation.assessment_id == assessment_id,
+               ScannerEvidence.assessment_id == assessment_id,
+               ResultProcessingOutcome.assessment_id == assessment_id,
+               BaselineExecutionRequest.assessment_id == assessment_id,
+               BaselineExecutionRequest.status == 'Completed', ResultProcessingOutcome.status == 'Succeeded',
+               ResultProcessingOutcome.is_partial.is_(False), ScannerEvidence.is_partial.is_(False))
+        .order_by(SecurityObservation.collected_at, SecurityObservation.id)).all()

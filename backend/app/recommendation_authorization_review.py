@@ -11,9 +11,8 @@ from .target_scope import classify, scope_entries
 
 
 def review_authorization(db, assessment, recommendation_id):
-    observations = db.scalars(select(SecurityObservation).where(
-        SecurityObservation.assessment_id == assessment.id,
-    ).order_by(SecurityObservation.collected_at, SecurityObservation.id)).all()
+    from .testing_completion_service import trusted_recommendation_observations
+    observations = trusted_recommendation_observations(db, assessment.id)
     result = evaluate_recommendation(recommendation_id, observations)
     if result['reason_code'] in ('invalid_recommendation_id', 'recommendation_not_current'):
         return result
@@ -38,7 +37,7 @@ def review_authorization(db, assessment, recommendation_id):
     elif classify(target.normalized_value, target.kind, scope_entries(db, assessment.id))[0] != 'in_scope':
         reason = 'target_out_of_scope'
     else:
-        reason = 'followup_profile_not_supported'
+        reason = result['reason_code']
 
     # Fingerprint is informational, not an authorization token.
     context = {

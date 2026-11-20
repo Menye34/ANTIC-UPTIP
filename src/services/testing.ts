@@ -86,7 +86,7 @@ export interface DecisionCounts {
 export interface Recommendation {
   decision: RecommendationDecision
   id: string
-  kind: 'review_host_discovery'
+  kind: 'review_host_discovery' | 'evidence_followup'
   title: string
   target_id: string
   target: string
@@ -96,9 +96,15 @@ export interface Recommendation {
   source_observation_id: string
   source_evidence_id: string
   execution_available: false
-  execution_status: 'not_supported'
-  suggested_test: null
-  suggested_tool: null
+  execution_status: 'not_supported' | 'pending_integration'
+  suggested_test: string | null
+  suggested_tool: string | null
+  review_outcome?: 'Accepted' | 'Rejected' | null
+  context_digest?: string
+  explanation?: string[]
+  tool_integration_status?: 'pending_integration'
+  execution_unavailability_reason?: string
+  proposed_test?: { id: string; version: number; name: string; tool: string; description: string; profile_id: null; definition_digest: string }
   source_test?: { test_name: string; tool: string; status: ExecutionStatus } | null
 }
 export interface RecommendationData {
@@ -108,6 +114,23 @@ export interface RecommendationData {
   decision_counts: DecisionCounts
   execution_authorized: false
 }
+
+function validProposal(row: Recommendation): boolean {
+  if (row.kind === 'review_host_discovery') return row.execution_status === 'not_supported'
+    && row.suggested_test === null && row.suggested_tool === null && row.port === null && row.service === null
+  const p = row.proposed_test
+  return row.execution_status === 'pending_integration' && row.tool_integration_status === 'pending_integration'
+    && row.execution_unavailability_reason === 'tool_integration_pending'
+    && typeof row.context_digest === 'string' && row.context_digest === row.id
+    && Array.isArray(row.explanation) && row.explanation.length === 3
+    && row.explanation.every(text => typeof text === 'string' && text.length > 0)
+    && [null, 'Accepted', 'Rejected'].includes(row.review_outcome ?? null)
+    && typeof row.service === 'string' && Number.isInteger(row.port) && row.port! > 0 && row.port! <= 65535
+    && !!p && ['Nikto', 'OWASP ZAP'].includes(p.tool) && p.name === row.suggested_test && p.tool === row.suggested_tool
+    && typeof p.description === 'string' && p.profile_id === null && Number.isInteger(p.version) && p.version > 0
+    && typeof p.id === 'string' && /^[a-f0-9]{64}$/.test(p.definition_digest)
+}
+
 export async function getRecommendations(assessmentId: string, signal: AbortSignal) {
   const result = await startRequest<RecommendationData>(assessmentId, '/testing/recommendations', signal)
   if (result.assessment_id !== assessmentId || result.execution_authorized !== false
@@ -116,12 +139,11 @@ export async function getRecommendations(assessmentId: string, signal: AbortSign
     || new Set(result.recommendations.map(row => row.id)).size !== result.count
     || result.recommendations.some(row => !row || typeof row.id !== 'string'
       || ![null, 'Reviewed', 'Deferred'].includes(row.decision)
-      || row.kind !== 'review_host_discovery' || row.title !== 'Review responding host'
+      || !['review_host_discovery', 'evidence_followup'].includes(row.kind) || typeof row.title !== 'string'
       || typeof row.target_id !== 'string' || typeof row.target !== 'string'
       || typeof row.reason !== 'string' || typeof row.source_observation_id !== 'string'
       || typeof row.source_evidence_id !== 'string' || row.execution_available !== false
-      || row.execution_status !== 'not_supported' || row.suggested_test !== null
-      || row.suggested_tool !== null || row.port !== null || row.service !== null
+      || !validProposal(row)
       || (row.source_test != null && (typeof row.source_test.test_name !== 'string'
         || typeof row.source_test.tool !== 'string' || !executionStates.includes(row.source_test.status))))) {
     throw new Error('Invalid recommendations response')

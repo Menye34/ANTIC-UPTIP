@@ -2,12 +2,13 @@
 
 This module cannot authorize, queue, or dispatch an execution.
 """
+import re
 from .recommendation_planner import plan_recommendations
 
 
 def evaluate_recommendation(recommendation_id, observations):
     """Recompute recommendation identity from persisted observations, not client input."""
-    if not isinstance(recommendation_id, str) or len(recommendation_id) != 64:
+    if not isinstance(recommendation_id, str) or not re.fullmatch(r'[0-9a-f]{64}', recommendation_id):
         return {'eligible': False, 'reason_code': 'invalid_recommendation_id',
                 'authorization_available': False, 'execution_available': False}
     matches = [item for item in plan_recommendations(observations)
@@ -17,7 +18,7 @@ def evaluate_recommendation(recommendation_id, observations):
                 'authorization_available': False, 'execution_available': False}
     item = matches[0]
     # No independently authorized follow-up profile has been implemented.
-    return {'eligible': False, 'reason_code': 'followup_profile_not_supported',
+    return {'eligible': False, 'reason_code': item['execution_unavailability_reason'],
             'recommendation_id': item['id'],
             'source_observation_id': item['source_observation_id'],
             'source_evidence_id': item['source_evidence_id'],

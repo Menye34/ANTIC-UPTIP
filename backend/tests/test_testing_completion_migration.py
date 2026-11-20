@@ -25,6 +25,7 @@ def history_db(scheduling_concurrency):
     root = Path(__file__).resolve().parents[1]
     config = Config(str(root / 'alembic.ini'))
     config.set_main_option('script_location', str(root / 'migrations'))
+    command.downgrade(config, '0022')
     command.upgrade(config, '0021')
     return app, factory, config
 
@@ -159,7 +160,8 @@ def test_real_completion_transaction_still_works_with_history_guards(history_db,
     from app.execution_orchestration import ExecutionRunner
     from app.execution_results import EvidenceStore
     app, factory, config = history_db
-    command.upgrade(config, '0022')
+    # Current API requires the additive review schema; 0022 guards remain installed.
+    command.upgrade(config, 'head')
     with factory() as db, TestClient(app, base_url='https://testserver') as client:
         client.headers['Origin'] = 'https://testserver'
         path, headers, _ = prepared.__wrapped__(client, db, monkeypatch)

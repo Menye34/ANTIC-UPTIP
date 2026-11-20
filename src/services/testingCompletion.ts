@@ -145,12 +145,12 @@ export async function getCompletionReview(assessmentId: string, signal: AbortSig
 
 export async function decideRecommendation(
   assessmentId: string, recommendationId: string, decision: 'Reviewed' | 'Deferred',
-  csrfToken: string, signal: AbortSignal,
+  csrfToken: string, signal: AbortSignal, reviewOutcome?: 'Accepted' | 'Rejected',
 ) {
   return startRequest(assessmentId, '/testing/completion/decisions', signal, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-    body: JSON.stringify({ recommendation_id: recommendationId, decision }),
+    body: JSON.stringify({ recommendation_id: recommendationId, decision, ...(reviewOutcome ? { review_outcome: reviewOutcome } : {}) }),
   })
 }
 

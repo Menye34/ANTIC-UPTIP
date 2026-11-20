@@ -22,6 +22,8 @@ pytestmark = pytest.mark.parametrize('scheduling_concurrency', ['empty'], indire
 
 @pytest.fixture
 def committed_completion(scheduling_concurrency, monkeypatch, tmp_path):
+    from recommendation_fixtures import mock_recommendations
+    mock_recommendations(monkeypatch)
     app, factory, *_ = scheduling_concurrency
     backend = Path(__file__).resolve().parents[1]
     config = Config(str(backend / 'alembic.ini'))
@@ -220,7 +222,8 @@ def test_readiness_is_coherent_when_worker_finishes_after_select(active_worker):
         after = client.get(path + '/testing/completion').json()
         assert after['summary']['counts']['Completed'] == 1
         assert after['summary']['active_attempts'] == after['summary']['active_execution_requests'] == 0
-        assert after['summary']['recommendation_count'] == 1 and not after['ready']
+        # Host reachability alone no longer fabricates a follow-up test.
+        assert after['summary']['recommendation_count'] == 0 and after['ready']
         assert after['snapshot_digest'] != before['snapshot_digest']
         assert post(client, path, headers, before).status_code == 409
 

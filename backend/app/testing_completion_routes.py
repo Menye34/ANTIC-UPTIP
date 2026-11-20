@@ -1,12 +1,13 @@
 """Testing Completion: fail-closed readiness, explicit decisions and atomic lifecycle transition."""
 from datetime import datetime, timezone
 import hmac
+import json
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from .assessment_routes import accessible, analyst
@@ -14,7 +15,7 @@ from .config import get_settings
 from .database import get_db
 from .models import (
     Assessment, AuthSession, TestingCompletionEvent,
-    TestingRecommendationDecision, User,
+    TestingRecommendationDecision, RecommendationReviewEvent, User,
 )
 from .testing_completion_service import review_state, receipt_snapshot
 from .testing_completion_schemas import CompletionReview, DecisionResponse
@@ -62,11 +63,14 @@ class DecisionBody(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     recommendation_id: str = Field(pattern=r'^[0-9a-f]{64}$')
     decision: Literal['Reviewed', 'Deferred']
+    review_outcome: Literal['Accepted', 'Rejected'] | None = None
 
 
 @router.post('/decisions', response_model=DecisionResponse)
 def decide(assessment_id: UUID, body: DecisionBody, request: Request,
            user: User = Depends(analyst), db: Session = Depends(get_db)):
+    if body.review_outcome is not None and body.decision != 'Reviewed':
+        raise HTTPException(422)
     csrf_guard(request, user, db)
     assessment = assessment_row(db, assessment_id, user, lock=True)
     if assessment.status != 'Testing':
@@ -84,6 +88,20 @@ def decide(assessment_id: UUID, body: DecisionBody, request: Request,
         record.decision = body.decision
         record.actor_id = user.id
         record.decided_at = datetime.now(timezone.utc)
+    if body.review_outcome is not None:
+        from .testing_completion_service import recommendation_state
+        current = recommendation_state(db, assessment_id, user)
+        item = next((item for item in current['recommendations'] if item['id'] == body.recommendation_id), None)
+        if item is None or item.get('context_digest') != body.recommendation_id:
+            raise HTTPException(409)
+        if item.get('review_outcome') != body.review_outcome:
+            revision = (db.scalar(select(func.max(RecommendationReviewEvent.revision)).where(
+                RecommendationReviewEvent.assessment_id == assessment_id,
+                RecommendationReviewEvent.recommendation_id == body.recommendation_id)) or 0) + 1
+            db.add(RecommendationReviewEvent(assessment_id=assessment_id, revision=revision,
+                recommendation_id=body.recommendation_id, context_digest=body.recommendation_id,
+                actor_id=user.id, outcome=body.review_outcome,
+                snapshot=json.loads(json.dumps(item, default=str))))
     db.commit()
     return {'assessment_id': str(assessment_id), 'recommendation_id': body.recommendation_id,
             'decision': body.decision}

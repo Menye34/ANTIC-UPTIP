@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import TestingPage from './TestingPage'
 import type { ExecutionStatus } from '../services/testing'
-import { assessmentId, executionDetails, testingData, recommendationData, completionReview, completedCompletionReview } from '../test-fixtures/testing'
+import { assessmentId, executionDetails, testingData, recommendationData, completionReview, completedCompletionReview, intelligentRecommendationData } from '../test-fixtures/testing'
 
 const reply = (value: unknown, status = 200) => ({ ok: status < 400, status, json: async () => value })
 const expired = vi.fn()
@@ -606,4 +606,78 @@ it('loads the persisted Finding Review lifecycle and receipt after a full page r
   fireEvent.click(screen.getByRole('tab', { name: 'Testing Completion' }))
   expect(await screen.findByRole('heading', { name: 'Testing Completed' })).toBeVisible()
   expect(fetcher.mock.calls.every(([, options]) => !options?.method)).toBe(true)
+})
+
+it.each(['Accepted', 'Rejected'] as const)('records %s only after server confirmation and readback, without execution', async outcome => {
+  let persisted: 'Accepted' | 'Rejected' | null = null
+  const fetcher = vi.fn<(input: RequestInfo | URL, options?: RequestInit) => Promise<ReturnType<typeof reply>>>(async (input, options) => {
+    const url = String(input)
+    if (url.endsWith('/decisions')) {
+      const body = JSON.parse(String(options?.body))
+      expect(body).toEqual({recommendation_id: 'a'.repeat(64), decision: 'Reviewed', review_outcome: outcome})
+      expect(new Headers(options?.headers).get('x-csrf-token')).toBe('synthetic-csrf')
+      persisted = outcome
+      return reply({assessment_id: assessmentId, recommendation_id:'a'.repeat(64),decision:'Reviewed'})
+    }
+    return reply(url.endsWith('/recommendations') ? intelligentRecommendationData(persisted) : testingData(['Completed']))
+  })
+  vi.stubGlobal('fetch',fetcher)
+  render(<TestingPage assessmentId={assessmentId} csrfToken="synthetic-csrf" onExpired={expired} />)
+  await screen.findByRole('table')
+  fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
+  fireEvent.click(await screen.findByRole('button',{name:'Review Suggestion'}))
+  const dialog=screen.getByRole('dialog')
+  expect(within(dialog).getByText('Assess an evidenced HTTP server.')).toBeVisible()
+  expect(within(dialog).getByText(/Integration pending/)).toBeVisible()
+  expect(within(dialog).getAllByText(/192.0.2.1/).length).toBeGreaterThan(0)
+  expect(fetcher.mock.calls.every(([,options])=>!options?.method)).toBe(true)
+  fireEvent.click(within(dialog).getByRole('button',{name:outcome==='Accepted'?'Accept':'Reject'}))
+  expect(await screen.findByText(outcome)).toBeVisible()
+  expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1)
+  expect(fetcher.mock.calls.some(([url])=>/\/start$|\/execute$/.test(String(url)))).toBe(false)
+})
+
+it('keeps a meaningful pending-integration proposal visible without CSRF or execution permission', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => reply(String(input).endsWith('/recommendations')
+    ? intelligentRecommendationData() : testingData(['Completed']))))
+  page();await screen.findByRole('table')
+  fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
+  fireEvent.click(await screen.findByRole('button',{name:'Review Suggestion'}))
+  const dialog=screen.getByRole('dialog')
+  expect(within(dialog).getByRole('button',{name:'Accept'})).toBeDisabled()
+  expect(within(dialog).getByRole('button',{name:'Reject'})).toBeDisabled()
+  expect(within(dialog).queryByRole('button',{name:'Start Test'})).not.toBeInTheDocument()
+  fireEvent.click(within(dialog).getByRole('button',{name:'Choose Alternative'}))
+  expect(within(dialog).getByRole('button',{name:'Confirm Alternative'})).toBeDisabled()
+})
+
+it('does not retry an uncertain Accept or submit duplicate review writes', async () => {
+  let rejectWrite!: (reason: Error) => void
+  const fetcher=vi.fn<(input: RequestInfo | URL, options?: RequestInit) => Promise<ReturnType<typeof reply>>>((input,options) => {
+    if(options?.method==='POST') return new Promise((_,reject)=>{rejectWrite=reject})
+    return Promise.resolve(reply(String(input).endsWith('/recommendations') ? intelligentRecommendationData() : testingData(['Completed'])))
+  })
+  vi.stubGlobal('fetch',fetcher)
+  render(<TestingPage assessmentId={assessmentId} csrfToken="synthetic-csrf" onExpired={expired} />)
+  await screen.findByRole('table');fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
+  fireEvent.click(await screen.findByRole('button',{name:'Review Suggestion'}))
+  const dialog=screen.getByRole('dialog');const accept=within(dialog).getByRole('button',{name:'Accept'})
+  fireEvent.click(accept);fireEvent.click(accept)
+  expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1)
+  await act(async()=>rejectWrite(new Error('lost response')))
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('unverified')
+  expect(within(dialog).getByRole('button',{name:'Accept'})).toBeDisabled()
+  expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1)
+})
+
+it('shows a later Deferred decision rather than a historical Accepted outcome', async () => {
+  const value=intelligentRecommendationData('Accepted')
+  value.recommendations[0].decision='Deferred'
+  value.decision_counts={total:1,pending_review:0,reviewed:0,deferred:1,pending_completion:1}
+  vi.stubGlobal('fetch',vi.fn(async(input: RequestInfo | URL)=>reply(String(input).endsWith('/recommendations')?value:testingData(['Completed']))))
+  page();await screen.findByRole('table');fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
+  expect(await screen.findByText('Deferred')).toBeVisible()
+  expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button',{name:'Review Suggestion'}))
+  expect(within(screen.getByRole('dialog')).getByText('Deferred')).toBeVisible()
 })

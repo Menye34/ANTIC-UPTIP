@@ -286,7 +286,7 @@ def test_0018_preserves_queued_requests_metadata_and_refuses_history_downgrade(s
         # current metadata is checked after upgrade to head by Phase 3 tests.
         from sqlalchemy import MetaData
         historical = MetaData()
-        later_tables = {'recommendation_authorization_records', 'recommendation_execution_requests',
+        later_tables = {'recommendation_review_events', 'recommendation_authorization_records', 'recommendation_execution_requests',
                         'testing_recommendation_decisions', 'testing_completion_events'}
         for table in Base.metadata.sorted_tables:
             if table.name not in later_tables:

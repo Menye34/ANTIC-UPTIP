@@ -172,14 +172,8 @@ def recommendation_eligibility(
 
     assessment_for(db, assessment_id, user)
 
-    observations = db.scalars(
-        select(SecurityObservation).where(
-            SecurityObservation.assessment_id == assessment_id
-        ).order_by(
-            SecurityObservation.collected_at,
-            SecurityObservation.id,
-        )
-    ).all()
+    from .testing_completion_service import trusted_recommendation_observations
+    observations = trusted_recommendation_observations(db, assessment_id)
 
     result = evaluate_recommendation(recommendation_id, observations)
 

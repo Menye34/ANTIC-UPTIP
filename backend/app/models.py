@@ -363,3 +363,5 @@ from .recommendation_authorization_models import (
 from .testing_completion_models import (
     TestingRecommendationDecision, TestingCompletionEvent,
 )
+
+from .recommendation_review_models import RecommendationReviewEvent
