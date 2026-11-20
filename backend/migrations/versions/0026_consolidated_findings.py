@@ -42,6 +42,10 @@ def upgrade():
             name='fk_finding_link_assessment'),
         sa.UniqueConstraint('observation_id', name='uq_finding_observation_once'))
     op.create_index('ix_finding_observations_assessment', 'finding_observations', ['assessment_id', 'finding_id'])
+    # Runtime can insert consolidated findings during authorized completion,
+    # but cannot mutate or delete historical findings.
+    op.execute("GRANT SELECT, INSERT ON public.consolidated_findings TO uptip_runtime")
+    op.execute("GRANT SELECT, INSERT ON public.finding_observations TO uptip_runtime")
     # The observation's assessment must match its finding's assessment.
     op.execute("""
 CREATE OR REPLACE FUNCTION check_finding_observation_assessment() RETURNS trigger AS $$
@@ -59,6 +63,8 @@ CREATE TRIGGER trg_finding_observation_assessment
 
 
 def downgrade():
+    op.execute("REVOKE SELECT, INSERT ON public.finding_observations FROM uptip_runtime")
+    op.execute("REVOKE SELECT, INSERT ON public.consolidated_findings FROM uptip_runtime")
     op.drop_table('finding_observations')
     op.execute('DROP FUNCTION IF EXISTS check_finding_observation_assessment()')
     op.drop_index('ix_findings_assessment_severity', table_name='consolidated_findings')
