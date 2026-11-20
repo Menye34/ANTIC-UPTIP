@@ -295,13 +295,13 @@ function observationLabel(item: { type: string; data: Record<string, unknown> })
     ? `${d.address}: ${d.status}` : item.type
 }
 
-type TestingPageProps = { assessmentId: string; onExpired: () => void; csrfToken?: string }
+type TestingPageProps = { assessmentId: string; onExpired: () => void; csrfToken?: string; onFindings?: () => void; currentAnalyst?: { id: string; username: string } }
 
 export default function TestingPage(props: TestingPageProps) {
   return <TestingAssessment key={props.assessmentId} {...props} />
 }
 
-function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingPageProps) {
+function TestingAssessment({ assessmentId, onExpired, csrfToken = '', onFindings, currentAnalyst }: TestingPageProps) {
   const [data, setData] = useState<TestingData>()
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
@@ -386,8 +386,8 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
     <nav aria-label="Breadcrumb">Testing</nav>
     <header className="testing-heading"><div><h1>Testing</h1>
       <p>Run security tests, check recommendations, and review your testing progress.</p></div>
-      <button type="button" className="analyst-create testing-manual" disabled title="Manual testing is unavailable in this release">
-        <img src={plus} alt="" />Run Manual Test</button>
+      {!(activeTab === 'completion' && completionOperation.phase === 'confirmed') && <button type="button" className="analyst-create testing-manual" disabled title="Manual testing is unavailable in this release">
+        <img src={plus} alt="" />Run Manual Test</button>}
     </header>
     <div className="testing-tabs" role="tablist" aria-label="Testing views">
       <button type="button" role="tab" id="test-activity-tab" aria-selected={activeTab === 'activity'} aria-controls="test-activity-panel" onClick={() => setActiveTab('activity')}>Test Activity</button>
@@ -401,7 +401,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
     {data && <ServiceDiscoveryScheduling data={data} visible={activeTab === 'activity'} available={!error}
       csrfToken={csrfToken} onExpired={onExpired} onChanged={() => setRetry(n => n + 1)} />}
     {data && <div role="tabpanel" id={activeTab === 'activity' ? 'test-activity-panel' : activeTab === 'recommendations' ? 'recommendations-panel' : 'testing-completion-panel'} aria-labelledby={activeTab === 'activity' ? 'test-activity-tab' : activeTab === 'recommendations' ? 'recommendations-tab' : 'testing-completion-tab'} className="testing-panel">
-      {activeTab === 'completion' ? <TestingCompletion assessmentId={assessmentId} csrfToken={csrfToken} operation={completionOperation} onOperationChange={setCompletionOperation} onExpired={onExpired} onDecisionsChanged={invalidateRecommendations} onContinue={() => setActiveTab('activity')} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
+      {activeTab === 'completion' ? <TestingCompletion currentAnalyst={currentAnalyst} assessmentId={assessmentId} csrfToken={csrfToken} operation={completionOperation} onOperationChange={setCompletionOperation} onExpired={onExpired} onDecisionsChanged={invalidateRecommendations} onContinue={() => setActiveTab('activity')} onFindings={onFindings} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
         <div className="testing-metrics">{[
           ['Total Tests', data.counts.total], ['In Progress', data.counts.in_progress],
           ['Completed', data.counts.completed], ['Failed', data.counts.failed],

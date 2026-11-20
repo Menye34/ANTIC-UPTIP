@@ -539,3 +539,26 @@ describe('Assessment Targets after Start', () => {
     }
   })
 })
+
+
+describe('Finding Review navigation', () => {
+  it('renders the assessment-scoped Findings route and navigates back to Testing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ ...assessment, status: 'Testing' })))
+    const { navigate } = renderPage(draftPath + '/findings')
+    expect(await screen.findByRole('heading', { name: 'Findings' })).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Findings' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Testing' })).not.toHaveAttribute('aria-current', 'page')
+    fireEvent.click(screen.getByRole('button', { name: 'Go to Testing' }))
+    expect(navigate).toHaveBeenCalledWith(draftPath + '/testing')
+  })
+  it('keeps the assessment ID when opening a nested finding detail URL', async () => {
+    const fetcher = vi.fn(async () => response({ ...assessment, status: 'Finding Review' }))
+    vi.stubGlobal('fetch', fetcher)
+    const { navigate } = renderPage(draftPath + '/findings/synthetic-finding')
+    expect(await screen.findByRole('heading', { name: 'Finding unavailable' })).toBeVisible()
+    expect(fetcher).toHaveBeenCalledWith(api + '/' + assessment.id, expect.anything())
+    fireEvent.click(screen.getByRole('button', { name: /Back to Findings/ }))
+    expect(navigate).toHaveBeenCalledWith(draftPath + '/findings')
+  })
+
+})

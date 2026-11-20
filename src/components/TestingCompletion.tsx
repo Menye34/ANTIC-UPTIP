@@ -12,6 +12,8 @@ type Props = {
   operation: CompletionOperation
   onOperationChange: (next: CompletionOperation) => void
   onContinue: () => void
+  onFindings?: () => void
+  currentAnalyst?: { id: string; username: string }
   onRecommendations: () => void
   onExpired: () => void
   onDecisionsChanged: () => void
@@ -21,7 +23,7 @@ export default function TestingCompletion(props: Props) {
   return <CompletionContent key={props.assessmentId} {...props} />
 }
 
-function CompletionContent({ assessmentId, csrfToken, operation, onOperationChange, onContinue, onRecommendations, onExpired, onDecisionsChanged }: Props) {
+function CompletionContent({ assessmentId, csrfToken, operation, onOperationChange, onContinue, onFindings, currentAnalyst, onRecommendations, onExpired, onDecisionsChanged }: Props) {
   const [review, setReview] = useState<CompletionData | undefined>(() => operation.phase === 'confirmed' ? operation.review : undefined)
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
@@ -122,6 +124,8 @@ function CompletionContent({ assessmentId, csrfToken, operation, onOperationChan
 
   const s = review?.summary
   const completed = Boolean(review?.lifecycle_status === 'Finding Review' && review.completion)
+  const completedBy = review?.completion && currentAnalyst?.id === review.completion.actor_id && currentAnalyst.username.trim()
+    ? currentAnalyst.username.trim() : null
   const ready = Boolean(review?.ready)
   const unresolved = operation.phase === 'uncertain' || operation.phase === 'submitting'
   const canBegin = Boolean(ready && review?.can_complete && csrfToken && !error && !submitting && !unresolved && !completed)
@@ -223,9 +227,9 @@ function CompletionContent({ assessmentId, csrfToken, operation, onOperationChan
           : running ? 'Active or queued execution requests remain. Review their status before completing testing.'
           : 'Review the items requiring attention before completing the testing phase.'}</p>
       </div></section>}
-    {review && <section ref={reviewPanel} tabIndex={-1} className="analyst-card testing-completion-review" aria-label="Testing Completion Review">
+    {review && <section ref={reviewPanel} tabIndex={-1} className="analyst-card testing-completion-review" aria-label={completed ? 'Testing Completed' : 'Testing Completion Review'}>
       <h2>{completed ? 'Testing Completed' : 'Testing Completion Review'}</h2>
-      {completed ? <p>Testing was completed on {new Date(review.completion!.completed_at).toLocaleString()}.</p>
+      {completed ? <p>Testing was completed on <time dateTime={review.completion!.completed_at}>{new Date(review.completion!.completed_at).toLocaleString()}</time>{completedBy ? ` by ${completedBy}` : ` by analyst ID ${review.completion!.actor_id}`}.</p>
         : <p>Review these items before you end the testing phase.</p>}
       {!completed && !review.can_complete && review.lifecycle_status === 'Testing' && <p>Only the assessment creator can complete testing. Assigned analysts can review this assessment.</p>}
       <div className="testing-completion-checks">
@@ -245,11 +249,11 @@ function CompletionContent({ assessmentId, csrfToken, operation, onOperationChan
           {!completed && <button type="button" className="analyst-link" onClick={onRecommendations}>Review Recommendations</button>}
         </div>
         <div className="testing-completion-check">
-          <div><h3>Candidate findings</h3><p>Candidate findings will be reviewed in the Findings stage. A verified count is not available yet.</p></div>
+          <div><h3>Candidate findings</h3><p>Candidate findings will be reviewed in the Findings stage. A verified candidate-finding count is not available yet.</p></div>
           <span className="testing-completion-status" data-state="next">Next stage</span>
         </div>
         <div className="testing-completion-check">
-          <div><h3>Processing errors</h3><p>{processing ? `${processing} processing issue(s) or incomplete processing records require attention.` : 'No outstanding processing issues were reported.'}</p></div>
+          <div><h3>Processing errors</h3><p>{processing ? `${processing} processing issue(s) or incomplete processing records require attention.` : 'No processing errors were reported.'}</p></div>
           <span className="testing-completion-status" data-state={processing ? 'attention' : 'clear'}>{processing ? 'Needs attention' : 'Clear'}</span>
         </div>
       </div>
@@ -265,7 +269,7 @@ function CompletionContent({ assessmentId, csrfToken, operation, onOperationChan
       </section>}
       <p className="testing-completion-help">{completed ? 'The assessment is now in Finding Review.' : ready ? 'Completing testing moves this assessment to Finding Review.' : 'Complete Testing becomes available once all required checks have passed.'}</p>
       <div className="testing-completion-actions">
-        {completed ? <button type="button" disabled title="Findings route is not yet available">Continue to Findings</button>
+        {completed ? <button type="button" className="analyst-create" disabled={!onFindings} onClick={onFindings}>Continue to Findings</button>
           : <><button type="button" onClick={onContinue}>Continue Testing</button>
             <button ref={completeButton} type="button" className="analyst-create" disabled={!canBegin || Boolean(confirmation)} onClick={openConfirmation}>Complete Testing</button></>}
       </div>

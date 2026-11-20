@@ -9,10 +9,11 @@ import type { CompletionReview } from '../services/testingCompletion'
 const reply = (value: unknown, status = 200) => ({ ok: status < 400, status, json: async () => value })
 const expired = vi.fn()
 const decisionsChanged = vi.fn()
+const navigateFindings = vi.fn()
 const showModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
 const close = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
 beforeEach(() => {
-  expired.mockReset(); decisionsChanged.mockReset()
+  expired.mockReset(); decisionsChanged.mockReset(); navigateFindings.mockReset()
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value(this: HTMLDialogElement) { this.open = true } })
   Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value(this: HTMLDialogElement) { this.open = false } })
 })
@@ -24,13 +25,13 @@ afterEach(() => {
   else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
 })
 
-function Harness({ csrf = 'synthetic-csrf', id = assessmentId }: { csrf?: string; id?: string }) {
+function Harness({ csrf = 'synthetic-csrf', id = assessmentId, currentAnalyst }: { csrf?: string; id?: string; currentAnalyst?: { id: string; username: string } }) {
   const [operation, setOperation] = useState<CompletionOperation>({ phase: 'idle' })
   const [show, setShow] = useState(true)
   return <>
     <button onClick={() => setShow(n => !n)}>Toggle completion</button>
-    {show && <TestingCompletion assessmentId={id} csrfToken={csrf} operation={operation} onOperationChange={setOperation}
-      onExpired={expired} onDecisionsChanged={decisionsChanged} onContinue={() => setShow(false)} onRecommendations={() => setShow(false)} />}
+    {show && <TestingCompletion currentAnalyst={currentAnalyst} assessmentId={id} csrfToken={csrf} operation={operation} onOperationChange={setOperation}
+      onExpired={expired} onDecisionsChanged={decisionsChanged} onContinue={() => setShow(false)} onFindings={navigateFindings} onRecommendations={() => setShow(false)} />}
   </>
 }
 function setup(value = completionReview(), csrf?: string) {
@@ -66,7 +67,7 @@ it('renders the completion snapshot in all metrics and exactly four review rows'
   expect(screen.getByRole('region', { name: 'Completed' })).toHaveTextContent('Completed1')
   expect(screen.getByRole('region', { name: 'Failed' })).toHaveTextContent('Failed0')
   expect(document.querySelectorAll('.testing-completion-check')).toHaveLength(4)
-  expect(screen.getByText(/A verified count is not available/)).toBeVisible()
+  expect(screen.getByText(/A verified candidate-finding count is not available/)).toBeVisible()
 })
 
 it.each([false, true])('applies creator capability without changing factual readiness: creator=%s', async creator => {
@@ -160,7 +161,9 @@ it('captures a private snapshot, submits its digest once and immediately display
   await act(async () => { resolvePost(reply(completedCompletionReview())) })
   expect(await screen.findByRole('heading', { name: 'Testing Completed' })).toBeVisible()
   expect(screen.queryByRole('button', { name: 'Complete Testing' })).not.toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to Findings' }))
+  expect(navigateFindings).toHaveBeenCalledTimes(1)
   expect(fetcher).toHaveBeenCalledTimes(2) // initial GET and POST, no compulsory post-success GET
 })
 
@@ -299,4 +302,20 @@ it('hides protected receipt data when access is lost instead of reusing it after
   fireEvent.click(screen.getByRole('button', { name: 'Toggle completion' }))
   fireEvent.click(screen.getByRole('button', { name: 'Toggle completion' }))
   expect(screen.queryByRole('heading', { name: 'Testing Completed' })).not.toBeInTheDocument()
+})
+
+
+it('shows the authenticated username only when it matches the receipt actor', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => reply(completedCompletionReview())))
+  render(<Harness currentAnalyst={{ id: 'synthetic-completion-actor', username: 'Verified Analyst' }} />)
+  expect(await screen.findByText(/by Verified Analyst/)).toBeVisible()
+  expect(screen.getByRole('region', { name: 'Testing Completed' })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeEnabled()
+})
+
+it('does not attribute another analyst\'s completion to the signed-in user', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => reply(completedCompletionReview())))
+  render(<Harness currentAnalyst={{ id: 'different-analyst', username: 'Other Analyst' }} />)
+  expect(await screen.findByText(/by analyst ID synthetic-completion-actor/)).toBeVisible()
+  expect(screen.queryByText(/by Other Analyst/)).not.toBeInTheDocument()
 })
