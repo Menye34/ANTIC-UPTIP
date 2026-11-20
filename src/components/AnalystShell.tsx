@@ -13,7 +13,7 @@ const navigation = [
   ['Testing', document], ['Findings', document], ['Report', document], ['Audit Log', document],
 ]
 
-export default function AnalystShell({ children, displayName, initials, signingOut, onSignOut, sidebar = true, createActive = false, scopeOverview, targetsActive = false, testingPath }: {
+export default function AnalystShell({ children, displayName, initials, signingOut, onSignOut, sidebar = true, createActive = false, scopeOverview, targetsActive = false, testingPath, findingsPath }: {
   children: ReactNode
   displayName?: string
   initials?: string
@@ -24,21 +24,23 @@ export default function AnalystShell({ children, displayName, initials, signingO
   scopeOverview?: string
   targetsActive?: boolean
   testingPath?: string
+  findingsPath?: string
 }) {
   const [accountOpen, setAccountOpen] = useState(false)
   const accountButton = useRef<HTMLButtonElement>(null)
   return <div className={sidebar ? "analyst-shell" : "analyst-shell assessment-shell-wide"}>
     {sidebar && <aside className="analyst-sidebar">
-      <div className="analyst-logo"><img src={testingPath ? testingShield : shield} alt="" />UPTIP</div>
+      <div className="analyst-logo"><img src={testingPath || findingsPath ? testingShield : shield} alt="" />UPTIP</div>
       <nav aria-label="Analyst workspace">
         {navigation.map(([label, icon], index) => index === 0
           ? <a href="/analyst/dashboard" aria-current={createActive || scopeOverview || testingPath ? undefined : "page"} key={label}><img src={icon} alt="" />{label}</a>
-          : testingPath && index === 2 ? <div className="analyst-assessment-nav" key={label}>
+          : (testingPath || findingsPath) && index === 2 ? <div className="analyst-assessment-nav" key={label}>
             <details><summary><img src={icon} alt="" />Scope &amp; Targets</summary>
-              <a href={testingPath.replace(/\/testing$/, '/scope')}>Authorized Scope</a>
-              <a href={testingPath.replace(/\/testing$/, '/targets')}>Assessment Targets</a>
+              <a href={(testingPath || findingsPath)!.replace(/\/(testing|findings)$/, '/scope')}>Authorized Scope</a>
+              <a href={(testingPath || findingsPath)!.replace(/\/(testing|findings)$/, '/targets')}>Assessment Targets</a>
             </details></div>
-          : testingPath && index === 3 ? <a href={testingPath} aria-current="page" key={label}><img src={icon} alt="" />Testing</a>
+          : (testingPath || findingsPath) && index === 3 ? <a href={(testingPath || findingsPath)!.replace(/\/findings$/, '/testing')} aria-current={testingPath ? 'page' : undefined} key={label}><img src={icon} alt="" />Testing</a>
+          : findingsPath && index === 4 ? <a href={findingsPath} aria-current="page" key={label}><img src={icon} alt="" />Findings</a>
           : scopeOverview && index === 1 ? <a href={scopeOverview} key={label}><img src={icon} alt="" />Assessment</a>
           : scopeOverview && index === 2 ? <div className="analyst-assessment-nav" key={label}>
             <details open><summary><img src={icon} alt="" />Setup</summary>
