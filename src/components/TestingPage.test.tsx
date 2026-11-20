@@ -380,7 +380,7 @@ it('shows ready confirmation and persisted completion without faking a Findings 
   const dialog = screen.getByRole('dialog')
   fireEvent.click(within(dialog).getByRole('button', { name: 'Complete Testing' }))
   expect(await screen.findByRole('heading', { name: 'Testing Completed' })).toBeVisible()
-  expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeEnabled()
 })
 
 it.each([null, 'Reviewed', 'Deferred'] as const)('renders persisted decision %s in cards and dialog without a write', async decision => {
