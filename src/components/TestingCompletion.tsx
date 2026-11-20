@@ -12,7 +12,7 @@ type Props = {
   operation: CompletionOperation
   onOperationChange: (next: CompletionOperation) => void
   onContinue: () => void
-  onFindings: () => void
+  onFindings?: () => void
   currentAnalyst?: { id: string; username: string }
   onRecommendations: () => void
   onExpired: () => void
@@ -269,7 +269,7 @@ function CompletionContent({ assessmentId, csrfToken, operation, onOperationChan
       </section>}
       <p className="testing-completion-help">{completed ? 'The assessment is now in Finding Review.' : ready ? 'Completing testing moves this assessment to Finding Review.' : 'Complete Testing becomes available once all required checks have passed.'}</p>
       <div className="testing-completion-actions">
-        {completed ? <button type="button" className="analyst-create" onClick={onFindings}>Continue to Findings</button>
+        {completed ? <button type="button" className="analyst-create" disabled={!onFindings} onClick={onFindings}>Continue to Findings</button>
           : <><button type="button" onClick={onContinue}>Continue Testing</button>
             <button ref={completeButton} type="button" className="analyst-create" disabled={!canBegin || Boolean(confirmation)} onClick={openConfirmation}>Complete Testing</button></>}
       </div>
