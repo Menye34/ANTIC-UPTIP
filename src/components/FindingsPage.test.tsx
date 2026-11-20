@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import FindingsPage from './FindingsPage'
 import type { Assessment } from '../services/assessments'
@@ -23,12 +23,12 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); expired.mockReset(); back.mo
 function renderPage() { return render(<FindingsPage assessmentId={assessment.id} onExpired={expired} onTesting={back} />) }
 
 it('loads an authorized assessment and does not invent candidate findings', async () => {
-  const fetcher = vi.fn(async () => reply(assessment))
+  const fetcher = vi.fn(async (url: string) => reply(url.endsWith('/findings') ? { assessment_id: assessment.id, lifecycle_status: 'Finding Review', total: 0, counts: { Critical: 0, High: 0, Medium: 0, Low: 0 }, findings: [] } : assessment))
   vi.stubGlobal('fetch', fetcher)
   renderPage()
   expect(await screen.findByRole('heading', { name: 'Findings' })).toBeVisible()
-  expect(screen.getByText('No findings yet')).toBeVisible()
-  expect(screen.getByText(/Consolidated finding data has not yet been connected/)).toBeVisible()
+  expect(await screen.findByText('No findings yet')).toBeVisible()
+  expect(screen.getByText(/No consolidated security issues were recorded/)).toBeVisible()
   expect(screen.getAllByText('0')).toHaveLength(5)
   expect(fetcher).toHaveBeenCalledWith('/api/v1/assessments/' + assessment.id,
     expect.objectContaining({ credentials: 'same-origin' }))
@@ -38,7 +38,7 @@ it('loads an authorized assessment and does not invent candidate findings', asyn
 })
 
 it('does not claim Finding Review when the persisted lifecycle is Testing', async () => {
-  vi.stubGlobal('fetch', vi.fn(async () => reply({ ...assessment, status: 'Testing' })))
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => reply(url.endsWith('/findings') ? { assessment_id: assessment.id, lifecycle_status: 'Testing', total: 0, counts: { Critical: 0, High: 0, Medium: 0, Low: 0 }, findings: [] } : { ...assessment, status: 'Testing' })))
   renderPage()
   expect(await screen.findByText(/Current status: Testing/)).toBeVisible()
   expect(screen.getByText('No findings yet')).toBeVisible()
@@ -95,4 +95,58 @@ it('renders F-02 details and an unavailable AI state without fabricated advice',
   fireEvent.click(screen.getByRole('button', { name: 'Close AI Assistant' }))
   fireEvent.click(screen.getByRole('button', { name: /Back to Findings/ }))
   expect(back).toHaveBeenCalledTimes(1)
+})
+
+it('loads real backend findings instead of showing zero by default', async () => {
+  const navigate = vi.fn()
+  const fetcher = vi.fn(async (url: string) => reply(url.endsWith('/findings')
+    ? { assessment_id: assessment.id, lifecycle_status: 'Finding Review', total: 1,
+        counts: { Critical: 0, High: 0, Medium: 1, Low: 0 },
+        findings: [{ id: sample.id, title: sample.title, severity: sample.severity,
+          affected_target: sample.affectedTarget, source: sample.source }] }
+    : assessment))
+  vi.stubGlobal('fetch', fetcher)
+  render(<FindingsPage assessmentId={assessment.id} onExpired={expired}
+    onTesting={back} onFinding={navigate} />)
+  expect(await screen.findByText(sample.title)).toBeVisible()
+  expect(screen.getByText('Showing 1 of 1 findings')).toBeVisible()
+  expect(screen.queryByText('No findings yet')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'View Details' }))
+  expect(navigate).toHaveBeenCalledWith(sample.id)
+  expect(fetcher).toHaveBeenCalledWith('/api/v1/assessments/' + assessment.id + '/findings',
+    expect.objectContaining({ credentials: 'same-origin' }))
+})
+
+it('does not show a misleading zero count when findings API fails', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => reply(
+    url.endsWith('/findings') ? {} : assessment,
+    url.endsWith('/findings') ? 503 : 200)))
+  renderPage()
+  expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load verified findings')
+  expect(screen.queryByText('No findings yet')).not.toBeInTheDocument()
+})
+
+it('loads F-02 details from the assessment-scoped API', async () => {
+  const fetcher = vi.fn(async (url: string) => reply(
+    url.endsWith('/findings/' + sample.id)
+      ? { id: sample.id, title: sample.title, severity: sample.severity,
+          affected_target: sample.affectedTarget, source: sample.source,
+          source_test: sample.sourceTest, description: sample.description,
+          impact: sample.impact, security_control: sample.securityControl,
+          observed_condition: sample.observedCondition,
+          detected_issue: sample.detectedIssue, remediation: sample.remediation }
+      : url.endsWith('/findings')
+        ? { assessment_id: assessment.id, lifecycle_status: 'Finding Review', total: 1,
+            counts: { Critical: 0, High: 0, Medium: 1, Low: 0 },
+            findings: [{ id: sample.id, title: sample.title, severity: sample.severity,
+              affected_target: sample.affectedTarget, source: sample.source }] }
+        : assessment))
+  vi.stubGlobal('fetch', fetcher)
+  render(<FindingsPage assessmentId={assessment.id} onExpired={expired}
+    onTesting={back} findingId={sample.id} />)
+  expect(await screen.findByRole('heading', { name: sample.title })).toBeVisible()
+  expect(screen.getByText(sample.remediation)).toBeVisible()
+  await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+    '/api/v1/assessments/' + assessment.id + '/findings/' + sample.id,
+    expect.objectContaining({ credentials: 'same-origin' })))
 })
