@@ -13,6 +13,9 @@ from .models import Assessment, BaselineToolState
 def record_tool_state(db, tool, state, capabilities):
     capabilities = sorted(set(capabilities))
     allowed = {profile.capability for profile in PROFILES if profile.tool == tool}
+    if tool == 'Nmap':
+        from .nmap_service_profile import CAPABILITY
+        allowed.add(CAPABILITY)
     if not allowed or state not in TOOL_STATES or not set(capabilities) <= allowed:
         raise ValueError('Unsupported tool state or capability.')
     table = BaselineToolState.__table__

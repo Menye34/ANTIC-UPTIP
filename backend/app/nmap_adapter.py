@@ -13,7 +13,12 @@ import stat
 import subprocess
 import time
 
-from .dispatch_policy import validate_plan
+from .dispatch_policy import validate_plan as validate_host_plan
+from .nmap_service_profile import validate_plan as validate_service_plan
+
+def validate_plan(plan):
+    return validate_host_plan(plan) or validate_service_plan(plan)
+
 
 
 class AdapterUnavailable(ValueError):

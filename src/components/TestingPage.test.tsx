@@ -681,3 +681,22 @@ it('shows a later Deferred decision rather than a historical Accepted outcome', 
   fireEvent.click(screen.getByRole('button',{name:'Review Suggestion'}))
   expect(within(screen.getByRole('dialog')).getByText('Deferred')).toBeVisible()
 })
+
+it('displays evidence-backed service observations without enabling pending tools', async () => {
+  const overview = testingData(['Completed'])
+  overview.executions[0] = { ...overview.executions[0], profile_id: 'service-discovery', profile_version: 1, test_name: 'Service Discovery' }
+  overview.discovered_so_far = [{ id: 'service-fact', execution_id: overview.executions[0].id,
+    target_id: overview.executions[0].target_id, type: 'service_discovery', partial: false,
+    data: { address: '192.0.2.1', port: 443, state: 'open', transport: 'tcp', service: 'https', version: '1.2' } }]
+  const details = executionDetails()
+  details.test_name = 'Service Discovery'
+  details.profile_id = 'service-discovery'
+  details.observations = [{ ...overview.discovered_so_far[0], evidence_id: 'verified-evidence' }]
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => reply(url.endsWith('/testing') ? overview : details)))
+  page()
+  expect(await screen.findByText('192.0.2.1:443 · TCP open · HTTPS · 1.2')).toBeVisible()
+  expect(screen.getByText('Recorded discovery observations are listed below. A detected service does not establish a web application or vulnerability.')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: /View Details: Service Discovery/ }))
+  expect(await screen.findByRole('dialog')).toBeVisible()
+  expect(within(screen.getByRole('dialog')).getByText('192.0.2.1:443 · TCP open · HTTPS · 1.2')).toBeVisible()
+})

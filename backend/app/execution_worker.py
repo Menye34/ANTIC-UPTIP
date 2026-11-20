@@ -58,7 +58,8 @@ def main():
         if ownership.scalar(text("SELECT has_schema_privilege(current_user,'public','CREATE') OR has_database_privilege(current_user,current_database(),'CREATE')")):
             raise RuntimeError('Worker role must not have schema or database creation privileges.')
         for table in ('assessments', 'users', 'assessment_start_authorizations', 'execution_attempts',
-                      'scanner_evidence', 'execution_events', 'security_observations', 'result_processing_outcomes'):
+                      'scanner_evidence', 'execution_events', 'security_observations', 'result_processing_outcomes',
+                      'service_discovery_consents', 'service_discovery_revocations'):
             unsafe = ownership.scalar(text("""
                 SELECT pg_has_role(current_user, c.relowner, 'MEMBER')
                     OR has_table_privilege(current_user, c.oid, 'DELETE,TRUNCATE,TRIGGER')

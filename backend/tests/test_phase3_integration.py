@@ -54,7 +54,7 @@ def test_phase3_migration_chain_preserves_existing_assessment(scheduling_concurr
     identifier = UUID(prepared_data[0].rsplit('/', 1)[1])
     config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
     config.set_main_option('script_location', str(Path(__file__).resolve().parents[1] / 'migrations'))
-    for revision in ('0019', '0020', '0021', '0022', '0023'):
+    for revision in ('0019', '0020', '0021', '0022', '0023', '0024'):
         command.upgrade(config, revision)
         with factory() as db:
             assert db.scalar(text('SELECT version_num FROM alembic_version')) == revision

@@ -111,6 +111,7 @@ def test_review_migration_refuses_history_downgrade_and_retains_runtime_restrict
         assert client.post(path+'/testing/completion/decisions',headers=headers,json=body).status_code==200
     config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
     config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
+    command.downgrade(config,'0023')  # Empty new service-consent tables are safely reversible.
     with pytest.raises(DBAPIError,match='recommendation review history'):
         command.downgrade(config,'0022')
     with factory() as db:

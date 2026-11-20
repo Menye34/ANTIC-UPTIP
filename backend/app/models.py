@@ -365,3 +365,5 @@ from .testing_completion_models import (
 )
 
 from .recommendation_review_models import RecommendationReviewEvent
+
+from .service_discovery_models import ServiceDiscoveryConsent, ServiceDiscoveryRevocation

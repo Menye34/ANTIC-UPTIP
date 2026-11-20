@@ -77,6 +77,7 @@ function Details({ assessmentId, executionId, onClose, onExpired }: {
           <h3>Execution Overview</h3>
           <dl className="testing-detail-grid">
             <div><dt>Test</dt><dd>{data.test_name}</dd></div>
+            <div><dt>Profile</dt><dd>{data.profile_id} v{data.profile_version}</dd></div>
             <div><dt>Tool</dt><dd>{data.tool}</dd></div>
             <div><dt>Target</dt><dd>{data.target}</dd></div>
             <div><dt>Status</dt><dd>{data.status}</dd></div>
@@ -100,7 +101,7 @@ function Details({ assessmentId, executionId, onClose, onExpired }: {
             <div><strong>{data.processing.length}</strong><span>Processing runs</span></div>
           </div>
           {data.observations.length ? <ul className="testing-detail-list">{data.observations.map(item =>
-            <li key={item.id}>{item.type}{item.partial ? ' · Partial result' : ''}</li>)}</ul>
+            <li key={item.id}>{observationLabel(item)}{item.partial ? ' · Partial result' : ''}</li>)}</ul>
             : <p>No processed observations recorded.</p>}
         </section>
         <section className="testing-detail-section" aria-label="Evidence summaries">
@@ -282,6 +283,17 @@ function RecommendationReview({ assessmentId, recommendation, onClose, onExpired
   </dialog>
 }
 
+function observationLabel(item: { type: string; data: Record<string, unknown> }) {
+  const d = item.data
+  if (item.type === 'service_discovery' && typeof d.address === 'string'
+      && Number.isInteger(d.port) && d.state === 'open' && d.transport === 'tcp'
+      && typeof d.service === 'string' && d.service.length > 0) {
+    return `${d.address}:${d.port} · TCP open · ${d.service.toUpperCase()}${typeof d.version === 'string' ? ` · ${d.version}` : ''}`
+  }
+  return item.type === 'host_discovery' && typeof d.address === 'string' && typeof d.status === 'string'
+    ? `${d.address}: ${d.status}` : item.type
+}
+
 type TestingPageProps = { assessmentId: string; onExpired: () => void; csrfToken?: string }
 
 export default function TestingPage(props: TestingPageProps) {
@@ -457,11 +469,10 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
             </dl></section>
           <section className="analyst-card"><h2>Discovered So Far</h2><p>Discovery and security-test results.</p>
             <div className="testing-discoveries">{['Open ports', 'Services', 'Web target'].map(label => <div key={label}><strong>—</strong><small>{label}</small></div>)}</div>
-            <p>Port, service and web-target totals are not provided by this API. Recorded host discovery observations are listed below.</p>
+            <p>Recorded discovery observations are listed below. A detected service does not establish a web application or vulnerability.</p>
             <p>{data.discovered_so_far.filter(item => item.type === 'host_discovery' && item.data?.status === 'up').length} responding host observations · {data.discovered_so_far.filter(item => item.partial).length} partial observations</p>
             {data.discovered_so_far.length ? <ul>{data.discovered_so_far.map(item => <li key={item.id}>
-              {item.type === 'host_discovery' && typeof item.data?.address === 'string' && typeof item.data?.status === 'string'
-                ? `${item.data.address}: ${item.data.status}` : item.type}{item.partial && ' (partial)'}</li>)}</ul> : <p>No discovery observations recorded.</p>}
+              {observationLabel(item)}{item.partial && ' (partial)'}</li>)}</ul> : <p>No discovery observations recorded.</p>}
           </section>
           <section className="analyst-card"><h2>Recent Activity</h2><p>Latest testing events.</p>
             {data.recent_activity.length ? <ul className="testing-events">{data.recent_activity.map((item, index) => {

@@ -24,6 +24,9 @@ def verify(db, request, *, attempt=None, worker_id=None, claim_id=None):
         if not condition:
             raise DispatchDenied(code)
 
+    if request.profile_id == 'service-discovery':
+        from .service_discovery import verify_service
+        return verify_service(db, request, attempt=attempt, worker_id=worker_id, claim_id=claim_id)
     require(request.tool == 'Nmap' and request.profile_id == PROFILE.key
             and request.activity == PROFILE.activity, 'unsupported_dispatch_profile')
     require(request.profile_version == 2, 'v1_output_contract_not_dispatchable'
