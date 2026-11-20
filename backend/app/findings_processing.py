@@ -64,7 +64,7 @@ def consolidate(db, assessment_id):
         if item is None:
             continue
         key, fields = item
-        linked = db.get(FindingObservation, (None, observation.id)) if False else db.scalar(
+        linked = db.scalar(
             select(FindingObservation).where(FindingObservation.observation_id == observation.id))
         if linked:
             continue
