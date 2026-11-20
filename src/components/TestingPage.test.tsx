@@ -89,9 +89,11 @@ it('loads functional read-only details without issuing an execution write', asyn
   const button = await screen.findByRole('button', { name: /View Details:/ })
   fireEvent.click(button)
   const dialog = await screen.findByRole('dialog')
+  fireEvent.click(await within(dialog).findByText('Technical Details'))
   expect(await within(dialog).findByText(/No execution attempt recorded/)).toBeVisible()
-  expect(within(dialog).getByText('No scanner evidence recorded.')).toBeVisible()
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+  fireEvent.click(within(dialog).getByText('Original Tool Output'))
+  expect(within(dialog).getByText('No original tool output recorded.')).toBeVisible()
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Close test details' }))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(button).toHaveFocus()
   expect(fetcher.mock.calls.every(([, options]) => !(options as RequestInit | undefined)?.method)).toBe(true)
@@ -140,7 +142,7 @@ it.each(['Running', 'Completed', 'Failed'] as ExecutionStatus[])(
     fireEvent.click(await screen.findByRole('button', { name: /View Details:/ }))
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByRole('heading', { name: status === 'Running'
-      ? 'Running Test Details' : status === 'Completed' ? 'Completed Test Details' : 'Failed Test Details' })).toBeVisible()
+      ? 'Running Test Details' : status === 'Completed' ? 'Test Details' : 'Failed Test Details' })).toBeVisible()
     expect(within(dialog).getByText('Technical Details')).toBeVisible()
     expect(within(dialog).getByRole('region', { name: 'Test results' })).toBeVisible()
     if (status === 'Failed') expect(within(dialog).getByText('scanner_error')).toBeVisible()
@@ -199,12 +201,12 @@ it('renders only API-provided T-04B recommendations and provenance without start
   expect(await screen.findByText('Review responding host')).toBeVisible()
   expect(screen.getByLabelText('1 recommendations')).toBeVisible()
   expect(screen.getByText('192.0.2.10')).toBeVisible()
-  const trigger = screen.getByRole('button', { name: 'Review Suggestion' })
+  const trigger = screen.getByRole('button', { name: 'Review Recommendation' })
   fireEvent.click(trigger)
   const drawer = screen.getByRole('dialog', { name: 'Review Recommendation' })
   expect(within(drawer).queryByText('observation-1')).not.toBeInTheDocument()
   expect(within(drawer).queryByText('evidence-1')).not.toBeInTheDocument()
-  for (const heading of ['Suggestion Information', 'Why Is This Suggested?', 'Source Test', 'Proposed Test']) {
+  for (const heading of ['Recommendation Information', 'Why is this recommended?', 'Source Test', 'Proposed Test']) {
     expect(within(drawer).getByRole('heading', { name: heading })).toBeVisible()
   }
   expect(within(drawer).getByRole('button', { name: 'Start Test' })).toBeDisabled()
@@ -263,7 +265,7 @@ it('shows verified source metadata and fail-closed alternative checks without ex
   page()
   await screen.findByRole('table')
   fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Review Suggestion' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Review Recommendation' }))
   const drawer = screen.getByRole('dialog')
   const source = within(drawer).getByRole('region', { name: 'Source Test' })
   expect(source).toHaveTextContent('Network Discovery')
@@ -295,7 +297,7 @@ it('rejects malformed alternative authorization responses instead of enabling co
   page()
   await screen.findByRole('table')
   fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Review Suggestion' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Review Recommendation' }))
   fireEvent.click(screen.getByRole('button', { name: 'Choose Alternative' }))
   expect(await screen.findByText('Unable to verify alternatives. No test can be confirmed.')).toBeVisible()
   expect(screen.getByRole('button', { name: 'Confirm Alternative' })).toBeDisabled()
@@ -392,7 +394,7 @@ it.each([null, 'Reviewed', 'Deferred'] as const)('renders persisted decision %s 
   fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
   expect(await screen.findByText(decision ?? 'Pending Review')).toBeVisible()
   expect(screen.getByLabelText('1 recommendations')).toBeVisible()
-  fireEvent.click(screen.getByRole('button', { name: 'Review Suggestion' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Review Recommendation' }))
   const dialog = screen.getByRole('dialog', { name: 'Review Recommendation' })
   expect(within(dialog).getByText(decision ?? 'Pending Review')).toBeVisible()
   expect(within(dialog).getByRole('button', { name: 'Start Test' })).toBeDisabled()
@@ -530,7 +532,7 @@ it('polls persisted decision changes without granting execution rights', async (
   decision = 'Reviewed'
   await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
   expect(screen.getByText('Reviewed')).toBeVisible()
-  fireEvent.click(screen.getByRole('button', { name: 'Review Suggestion' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Review Recommendation' }))
   expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Start Test' })).toBeDisabled()
 })
 
@@ -581,7 +583,7 @@ it.each([401, 403, 404])('clears an open recommendation when overview access is 
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
   fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
-  fireEvent.click(screen.getByRole('button', { name: 'Review Suggestion' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Review Recommendation' }))
   expect(screen.getByRole('dialog')).toBeVisible()
   allowed = false
   await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
@@ -625,7 +627,7 @@ it.each(['Accepted', 'Rejected'] as const)('records %s only after server confirm
   render(<TestingPage assessmentId={assessmentId} csrfToken="synthetic-csrf" onExpired={expired} />)
   await screen.findByRole('table')
   fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
-  fireEvent.click(await screen.findByRole('button',{name:'Review Suggestion'}))
+  fireEvent.click(await screen.findByRole('button',{name:'Review Recommendation'}))
   const dialog=screen.getByRole('dialog')
   expect(within(dialog).getByText('Assess an evidenced HTTP server.')).toBeVisible()
   expect(within(dialog).getByText(/Integration pending/)).toBeVisible()
@@ -642,7 +644,7 @@ it('keeps a meaningful pending-integration proposal visible without CSRF or exec
     ? intelligentRecommendationData() : testingData(['Completed']))))
   page();await screen.findByRole('table')
   fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
-  fireEvent.click(await screen.findByRole('button',{name:'Review Suggestion'}))
+  fireEvent.click(await screen.findByRole('button',{name:'Review Recommendation'}))
   const dialog=screen.getByRole('dialog')
   expect(within(dialog).getByRole('button',{name:'Accept'})).toBeDisabled()
   expect(within(dialog).getByRole('button',{name:'Reject'})).toBeDisabled()
@@ -660,7 +662,7 @@ it('does not retry an uncertain Accept or submit duplicate review writes', async
   vi.stubGlobal('fetch',fetcher)
   render(<TestingPage assessmentId={assessmentId} csrfToken="synthetic-csrf" onExpired={expired} />)
   await screen.findByRole('table');fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
-  fireEvent.click(await screen.findByRole('button',{name:'Review Suggestion'}))
+  fireEvent.click(await screen.findByRole('button',{name:'Review Recommendation'}))
   const dialog=screen.getByRole('dialog');const accept=within(dialog).getByRole('button',{name:'Accept'})
   fireEvent.click(accept);fireEvent.click(accept)
   expect(fetcher.mock.calls.filter(([,options])=>options?.method==='POST')).toHaveLength(1)
@@ -678,7 +680,7 @@ it('shows a later Deferred decision rather than a historical Accepted outcome', 
   page();await screen.findByRole('table');fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
   expect(await screen.findByText('Deferred')).toBeVisible()
   expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button',{name:'Review Suggestion'}))
+  fireEvent.click(screen.getByRole('button',{name:'Review Recommendation'}))
   expect(within(screen.getByRole('dialog')).getByText('Deferred')).toBeVisible()
 })
 
@@ -698,32 +700,39 @@ it('displays evidence-backed service observations without enabling pending tools
   expect(screen.getByText('Recorded discovery observations are listed below. A detected service does not establish a web application or vulnerability.')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: /View Details: Service Discovery/ }))
   expect(await screen.findByRole('dialog')).toBeVisible()
-  expect(within(screen.getByRole('dialog')).getByText('192.0.2.1:443 · TCP open · HTTPS · 1.2')).toBeVisible()
+  const table = await within(screen.getByRole('dialog')).findByRole('table', { name: 'Discovered ports and services' })
+  expect(within(table).getByText('443/tcp')).toBeVisible()
+  expect(within(table).getByText('HTTPS')).toBeVisible()
+  expect(within(table).getByText('1.2')).toBeVisible()
 })
 
-it('schedules service discovery through the Testing UI and refreshes persisted execution status', async () => {
-  let scheduled = false
-  const initial = { ...testingData(['Completed']), can_schedule_service_discovery: true }
-  const updated = { ...testingData(['Completed','Running']), can_schedule_service_discovery: true }
-  updated.executions[1] = { ...updated.executions[1], id: 'service-execution', target_id: initial.executions[0].target_id,
-    target: initial.executions[0].target, test_name: 'Service Discovery', profile_id: 'service-discovery', profile_version: 1 }
-  const receipt = { execution_id: 'service-execution', assessment_id: assessmentId, target_id: initial.executions[0].target_id,
-    ports: [80,443], consent_digest: 'a'.repeat(64), expires_at: '2026-11-20T10:00:00Z', status: 'Queued', execution_authorized: false }
-  const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
-    if (options?.method === 'POST') { scheduled = true; return reply(receipt) }
-    if (url.endsWith('/testing')) return reply(scheduled ? updated : initial)
+it('preserves T-01 monitoring without an additional service scheduling card or POST', async () => {
+  const data = { ...testingData(['Completed']), can_schedule_service_discovery: true }
+  const fetcher = vi.fn(async (url: string) => {
+    if (url.endsWith('/testing')) return reply(data)
     throw new Error('Unexpected request')
   })
   vi.stubGlobal('fetch', fetcher)
   render(<TestingPage assessmentId={assessmentId} onExpired={expired} csrfToken="csrf" />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Schedule Service Discovery' }))
-  fireEvent.change(screen.getByLabelText('Authorized target'), { target: { value: initial.executions[0].target_id } })
-  fireEvent.change(screen.getByLabelText('Authorized TCP ports'), { target: { value: '80,443' } })
-  fireEvent.click(screen.getByRole('checkbox'))
-  fireEvent.click(screen.getByRole('button', { name: 'Confirm and Queue' }))
-  expect(await screen.findByText(/Service-discovery scheduling was confirmed/)).toBeVisible()
-  expect(await screen.findByText('Service Discovery', { selector: 'th' })).toBeVisible()
-  expect(within(screen.getByRole('table', { name: 'Test Activity' })).getByText('Running')).toBeVisible()
-  expect(fetcher.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1)
+  expect(await screen.findByRole('table', { name: 'Test Activity' })).toBeVisible()
+  expect(screen.queryByRole('region', { name: 'Nmap Service Discovery' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: 'Nmap Service Discovery' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Schedule Service Discovery' })).not.toBeInTheDocument()
+  expect(screen.queryByText(/No saved receipt is visible yet/)).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Run Manual Test' })).toBeDisabled()
+  expect(fetcher.mock.calls.every(([url]) => url.endsWith('/testing'))).toBe(true)
+})
+
+it('displays authoritative discovery totals, scope and authorization identity without fabricated web targets', async () => {
+  const data = testingData(['Completed'])
+  data.discovery_totals = { open_ports: 2, services: 2, web_targets: null }
+  data.authorization_scope.boundaries = [{ value: '192.0.2.0/24', kind: 'Subnet' }]
+  data.authorization_scope.authorized_by = { id: 'actor', username: 'analyst-real', confirmed_at: '2026-11-20T10:00:00Z' }
+  vi.stubGlobal('fetch', vi.fn(async () => reply(data)))
+  page()
+  expect(await screen.findByText('192.0.2.0/24')).toBeVisible()
+  expect(screen.getByText(/analyst-real/)).toBeVisible()
+  for (const label of ['Open ports', 'Services']) expect(screen.getByText(label).previousElementSibling).toHaveTextContent('2')
+  expect(screen.getByText('Web target').previousElementSibling).toHaveTextContent('—')
+  expect(screen.queryByText('Not provided by the Testing API.')).not.toBeInTheDocument()
 })

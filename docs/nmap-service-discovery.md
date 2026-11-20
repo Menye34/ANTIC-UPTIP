@@ -1,5 +1,10 @@
 # Opt-in Nmap TCP Service Discovery v1
 
+> Current analyst workflow: [Automatic service baseline](automatic-service-baseline.md).
+> New Start reviews prepare TCP 80/443 automatically. The explicit/manual
+> scheduling interface described below is historical and is no longer mounted
+> on the Testing page; its existing endpoints and history are not rewritten.
+
 Service discovery is a separate capability, never automatically added to Start
 Assessment or the baseline catalog. Host discovery v1/v2 and immutable historical
 Start records retain their existing meaning. Nikto and OWASP ZAP remain pending,

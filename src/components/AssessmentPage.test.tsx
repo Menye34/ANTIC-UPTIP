@@ -298,7 +298,7 @@ describe('Authorized Scope', () => {
     expect(await screen.findByText('Scope added')).toBeVisible()
     expect(screen.getByRole('cell', { name: entry.value })).toBeVisible()
     expect(fetcher.mock.calls[1][0]).toBe(api + '/' + assessment.id + '/scope')
-    expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ value: entry.value, revision: 0, tcp_ports: [] })
+    expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ value: entry.value, revision: 0 })
     fireEvent.change(input, { target: { value: entry.value } })
     fireEvent.click(add)
     expect(await screen.findByText('This scope entry already exists. Enter a different value.')).toBeVisible()

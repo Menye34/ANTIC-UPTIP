@@ -72,15 +72,16 @@ def test_malformed_partial_wrong_target_or_port_fail_closed(content):
 @pytest.fixture
 def service_setup(client, db, prepared):
     path,headers,user=prepared
-    # Capability is attested BEFORE Start, so immutable baseline fingerprints
-    # bind the complete trusted tool-state revision without rewriting history.
+    # These tests exercise the historical explicit scheduling API. Start with
+    # host capability only, then attest service capability: the newer automatic
+    # baseline must not retrofit service consent into an existing assessment.
+    started=confirm(client,path,headers,get_review(client,path)['start_review'])
+    assert started.status_code==201,started.text
+    host=db.get(BaselineExecutionRequest,UUID(started.json()['queued_execution_ids'][0]))
     record_tool_state(db,'Nmap','enabled',['ipv4-discovery','tcp-service-discovery'])
     from app.baseline_resolution import reconcile
     assessment=db.get(Assessment,UUID(path.rsplit('/',1)[1]))
     reconcile(db,assessment,'tool_state_changed');db.commit()
-    started=confirm(client,path,headers,get_review(client,path)['start_review'])
-    assert started.status_code==201,started.text
-    host=db.get(BaselineExecutionRequest,UUID(started.json()['queued_execution_ids'][0]))
     return path,headers,user,host
 
 

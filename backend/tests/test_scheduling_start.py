@@ -48,11 +48,13 @@ def assessment_record_count(db, model, path):
     )
 
 
-def test_full_start_and_replay_with_no_deployment_records(client, db, prepared):
+def test_partial_host_start_and_replay_when_service_capability_is_unavailable(client, db, prepared):
     path, headers, _ = prepared
     data = get_review(client,path)
     review = data['start_review']
-    assert review['confirmation_possible'] and review['mode']=='full'
+    assert review['confirmation_possible'] and review['mode']=='partial'
+    assert [a['profile_id'] for a in review['excluded_activities']]==['service-discovery']
+    assert review['excluded_activities'][0]['policy']['reason_code']=='service_preparation_unavailable'
     assert data['counts']=={'total':1,'eligible':1,'blocked_or_excluded':0}
     assert data['execution_authorized'] is False
     assert review['schema_version']==3 and review['purpose']=='schedule_only'
@@ -207,7 +209,8 @@ def test_unavailable_tool_has_no_confirmable_review(client,db,prepared,state):
     assert data['counts']=={'total':1,'eligible':0,'blocked_or_excluded':1}
     assert data['start_review']['confirmation_possible'] is False
     assert data['start_review']['review_token'] is None
-    assert len(data['start_review']['excluded_activities'])==1
+    assert {a['profile_id'] for a in data['start_review']['excluded_activities']}=={'network-discovery','service-discovery'}
+    assert not any(a['start_review_eligible'] for a in data['start_review']['excluded_activities'])
 
 
 def test_preparation_tampering_fails_closed(client,db,prepared):

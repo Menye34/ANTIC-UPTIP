@@ -141,7 +141,8 @@ def test_scope_ports_readback_audit_and_clear(client, db, prepared):
     assert client.patch(path + '/scope/' + entry['id'], headers=headers,
         json={'revision': scope['revision'], 'value': entry['value'], 'tcp_ports': []}).status_code == 200
     review = get_review(client, path)['start_review']
-    assert [a['profile_id'] for a in review['eligible_activities']] == ['network-discovery']
+    assert [a['profile_id'] for a in review['eligible_activities']] == ['network-discovery', 'service-discovery']
+    assert review['eligible_activities'][1]['scheduling_preparation']['authorized_tcp_ports'] == [80, 443]
 
 
 def test_scope_port_history_refuses_downgrade(scheduling_concurrency, monkeypatch):

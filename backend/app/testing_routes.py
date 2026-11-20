@@ -2,12 +2,13 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, and_
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 
 from .assessment_routes import accessible, analyst
 from .database import get_db
-from .models import (Assessment, AssessmentStartAuthorization, BaselineExecutionRequest, User,
+from .models import (ScopeEntry, Assessment, AssessmentStartAuthorization, BaselineExecutionRequest, User,
                      ExecutionAttempt, ScannerEvidence, ResultProcessingOutcome, SecurityObservation, ExecutionEvent)
 
 router = APIRouter(prefix='/api/v1/assessments/{assessment_id}/testing')
@@ -56,8 +57,55 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
         'execution_id', recent_events.c.execution_id,
         'occurred_at', recent_events.c.occurred_at,
     ))).select_from(recent_events).scalar_subquery())
+    boundaries = select(func.json_agg(func.json_build_object('value', ScopeEntry.normalized_value,
+        'kind', ScopeEntry.kind))).where(ScopeEntry.assessment_id == Assessment.id).correlate(Assessment).scalar_subquery()
+    actor = select(User.username).where(User.id == AssessmentStartAuthorization.actor_id).correlate(AssessmentStartAuthorization).scalar_subquery()
+    trusted = (select(func.json_agg(func.json_build_object('target_id', SecurityObservation.target_id,
+        'type', SecurityObservation.observation_type, 'data', SecurityObservation.data)))
+        .select_from(SecurityObservation)
+        .join(ResultProcessingOutcome, and_(ResultProcessingOutcome.id == SecurityObservation.processing_id,
+            ResultProcessingOutcome.evidence_id == SecurityObservation.evidence_id,
+            ResultProcessingOutcome.attempt_id == SecurityObservation.attempt_id,
+            ResultProcessingOutcome.request_id == SecurityObservation.request_id,
+            ResultProcessingOutcome.target_id == SecurityObservation.target_id,
+            ResultProcessingOutcome.assessment_id == SecurityObservation.assessment_id))
+        .join(ScannerEvidence, and_(ScannerEvidence.id == SecurityObservation.evidence_id,
+            ScannerEvidence.attempt_id == SecurityObservation.attempt_id,
+            ScannerEvidence.request_id == SecurityObservation.request_id,
+            ScannerEvidence.target_id == SecurityObservation.target_id,
+            ScannerEvidence.assessment_id == SecurityObservation.assessment_id))
+        .join(ExecutionAttempt, and_(ExecutionAttempt.id == SecurityObservation.attempt_id,
+            ExecutionAttempt.request_id == SecurityObservation.request_id,
+            ExecutionAttempt.target_id == SecurityObservation.target_id,
+            ExecutionAttempt.assessment_id == SecurityObservation.assessment_id))
+        .join(BaselineExecutionRequest, and_(BaselineExecutionRequest.id == SecurityObservation.request_id,
+            BaselineExecutionRequest.target_id == SecurityObservation.target_id,
+            BaselineExecutionRequest.assessment_id == SecurityObservation.assessment_id))
+        .where(SecurityObservation.assessment_id == Assessment.id,
+            SecurityObservation.is_partial.is_(False), ScannerEvidence.is_partial.is_(False),
+            ResultProcessingOutcome.is_partial.is_(False), ResultProcessingOutcome.status == 'Succeeded',
+            BaselineExecutionRequest.status == 'Completed', ExecutionAttempt.status == 'Succeeded').correlate(Assessment).scalar_subquery())
+    service_processed = (select(ResultProcessingOutcome.id)
+        .join(ScannerEvidence, and_(ScannerEvidence.id == ResultProcessingOutcome.evidence_id,
+            ScannerEvidence.attempt_id == ResultProcessingOutcome.attempt_id,
+            ScannerEvidence.request_id == ResultProcessingOutcome.request_id,
+            ScannerEvidence.target_id == ResultProcessingOutcome.target_id,
+            ScannerEvidence.assessment_id == ResultProcessingOutcome.assessment_id))
+        .join(ExecutionAttempt, and_(ExecutionAttempt.id == ResultProcessingOutcome.attempt_id,
+            ExecutionAttempt.request_id == ResultProcessingOutcome.request_id,
+            ExecutionAttempt.target_id == ResultProcessingOutcome.target_id,
+            ExecutionAttempt.assessment_id == ResultProcessingOutcome.assessment_id))
+        .join(BaselineExecutionRequest,
+        and_(BaselineExecutionRequest.id == ResultProcessingOutcome.request_id,
+             BaselineExecutionRequest.assessment_id == ResultProcessingOutcome.assessment_id,
+             BaselineExecutionRequest.target_id == ResultProcessingOutcome.target_id)).where(
+        ResultProcessingOutcome.assessment_id == Assessment.id, ResultProcessingOutcome.status == 'Succeeded',
+        ResultProcessingOutcome.is_partial.is_(False), BaselineExecutionRequest.status == 'Completed',
+        BaselineExecutionRequest.profile_id == 'service-discovery', ScannerEvidence.is_partial.is_(False),
+        ExecutionAttempt.status == 'Succeeded').correlate(Assessment).exists())
     rows = db.execute(
-        select(Assessment, AssessmentStartAuthorization, BaselineExecutionRequest, discoveries, activity)
+        select(Assessment, AssessmentStartAuthorization, BaselineExecutionRequest, discoveries, activity,
+               boundaries, actor, trusted, service_processed)
         .outerjoin(AssessmentStartAuthorization,
                    AssessmentStartAuthorization.assessment_id == Assessment.id)
         .outerjoin(BaselineExecutionRequest, BaselineExecutionRequest.assessment_id == Assessment.id)
@@ -67,11 +115,16 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
     ).all()
     if not rows:
         raise HTTPException(404)
-    assessment, authorization, _, observations, event_activity = rows[0]
+    assessment, authorization, _, observations, event_activity, boundary_rows, actor_name, verified, processed = rows[0]
     requests = [row[2] for row in rows if row[2] is not None]
     counts = {state: sum(item.status == state for item in requests) for state in
               ('Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled')}
     snapshot = authorization.snapshot if authorization else {}
+    from .baseline_catalog import fingerprint
+    boundary_rows = sorted(boundary_rows or [], key=lambda b: (b['value'], b['kind']))
+    scope_current = bool(authorization and assessment.scope_revision == snapshot.get('scope_revision')
+        and fingerprint(sorted([[b['value'], b['kind']] for b in boundary_rows])) == snapshot.get('scope_digest'))
+    from .testing_read_summary import discovery_totals
     return {
         'assessment_id': assessment_id, 'lifecycle_status': assessment.status,
         # Permission to request preparation, not proof of dispatch eligibility.
@@ -84,12 +137,17 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
         'executions': [execution_view(item) for item in requests],
         'authorization_scope': {
             'authorization_id': authorization.id if authorization else None,
+            'boundaries': boundary_rows if scope_current else None,
+            'scope_current': scope_current,
+            'authorized_by': {'id': str(authorization.actor_id), 'username': actor_name,
+                              'confirmed_at': authorization.confirmed_at.isoformat()} if authorization and actor_name else None,
             'scope_revision': snapshot.get('scope_revision'), 'scope_digest': snapshot.get('scope_digest'),
             'mode': snapshot.get('mode'), 'policy': snapshot.get('policy'),
             'excluded_activities': snapshot.get('excluded_activities', []),
             'excluded_targets': snapshot.get('excluded_targets', []),
         },
         'discovered_so_far': observations or [],
+        'discovery_totals': discovery_totals(verified or [], bool(processed)),
         'recent_activity': sorted(
             (event_activity or []) + [
                 {'event': 'execution_queued', 'execution_id': item.id,
@@ -113,43 +171,70 @@ def list_executions(assessment_id: UUID, user: User = Depends(analyst), db: Sess
 @router.get('/executions/{execution_id}')
 def execution_details(assessment_id: UUID, execution_id: UUID,
                       user: User = Depends(analyst), db: Session = Depends(get_db)):
-    assessment_for(db, assessment_id, user)
-    request = db.scalar(select(BaselineExecutionRequest).where(
-        BaselineExecutionRequest.id == execution_id, BaselineExecutionRequest.assessment_id == assessment_id,
-    ))
-    if request is None:
+    def collection(model, fields):
+        values = [value for key, field in fields.items() for value in (key, getattr(model, field))]
+        ordering = {'execution_attempts': [model.attempt_number] if model is ExecutionAttempt else [],
+                    'scanner_evidence': [model.collected_at, model.id] if model is ScannerEvidence else [],
+                    'result_processing_outcomes': [model.created_at, model.id] if model is ResultProcessingOutcome else [],
+                    'security_observations': [model.id],
+                    'execution_events': [model.occurred_at, model.id] if model is ExecutionEvent else []}[model.__tablename__]
+        return select(func.json_agg(aggregate_order_by(func.json_build_object(*values), *ordering))).where(
+            model.request_id == BaselineExecutionRequest.id,
+            model.assessment_id == BaselineExecutionRequest.assessment_id,
+            model.target_id == BaselineExecutionRequest.target_id).correlate(BaselineExecutionRequest).scalar_subquery()
+    attempts = collection(ExecutionAttempt, {k: k for k in ('id','attempt_number','status','claimed_at',
+        'started_at','finished_at','exit_code','reason_code','termination_outcome','recovery_reason')})
+    evidence = collection(ScannerEvidence, {'id':'id','attempt_id':'attempt_id','format':'format',
+        'sha256':'content_hash','size_bytes':'size_bytes','partial':'is_partial','collected_at':'collected_at'})
+    processing = collection(ResultProcessingOutcome, {'id':'id','evidence_id':'evidence_id','status':'status',
+        'processor':'processor','version':'processor_version','error_code':'error_code',
+        'observation_count':'observation_count','partial':'is_partial'})
+    observations = collection(SecurityObservation, {'id':'id','type':'observation_type','data':'data',
+        'partial':'is_partial','evidence_id':'evidence_id'})
+    events = collection(ExecutionEvent, {'id':'id','event':'event_type','reason_code':'reason_code',
+        'occurred_at':'occurred_at','attempt_id':'attempt_id'})
+    row = db.execute(select(BaselineExecutionRequest, attempts, evidence, processing, observations, events)
+        .join(Assessment, Assessment.id == BaselineExecutionRequest.assessment_id)
+        .where(Assessment.id == assessment_id, accessible(user), BaselineExecutionRequest.id == execution_id)
+        .execution_options(populate_existing=True)).one_or_none()
+    if row is None:
         raise HTTPException(404)
-    attempts = db.scalars(select(ExecutionAttempt).where(
-        ExecutionAttempt.request_id == execution_id, ExecutionAttempt.assessment_id == assessment_id)
-        .order_by(ExecutionAttempt.attempt_number)).all()
-    evidence = db.scalars(select(ScannerEvidence).where(
-        ScannerEvidence.request_id == execution_id, ScannerEvidence.assessment_id == assessment_id)
-        .order_by(ScannerEvidence.collected_at)).all()
-    processing = db.scalars(select(ResultProcessingOutcome).where(
-        ResultProcessingOutcome.request_id == execution_id, ResultProcessingOutcome.assessment_id == assessment_id)
-        .order_by(ResultProcessingOutcome.created_at)).all()
-    observations = db.scalars(select(SecurityObservation).where(
-        SecurityObservation.request_id == execution_id, SecurityObservation.assessment_id == assessment_id)).all()
-    events = db.scalars(select(ExecutionEvent).where(
-        ExecutionEvent.request_id == execution_id, ExecutionEvent.assessment_id == assessment_id)
-        .order_by(ExecutionEvent.occurred_at, ExecutionEvent.id)).all()
-    # No stdout/stderr, storage paths, worker process identity or secrets.
+    request, attempts, evidence, processing, observations, events = row
     return {**execution_view(request), 'authorized_activity': request.authorized_activity,
-            'dispatch_status': 'requires_fresh_authorization',
-            'attempts': [{'id': a.id, 'attempt_number': a.attempt_number, 'status': a.status,
-                'claimed_at': a.claimed_at, 'started_at': a.started_at, 'finished_at': a.finished_at,
-                'exit_code': a.exit_code, 'reason_code': a.reason_code,
-                'termination_outcome': a.termination_outcome, 'recovery_reason': a.recovery_reason} for a in attempts],
-            'evidence': [{'id': e.id, 'attempt_id': e.attempt_id, 'format': e.format,
-                'sha256': e.content_hash, 'size_bytes': e.size_bytes, 'partial': e.is_partial,
-                'collected_at': e.collected_at} for e in evidence],
-            'processing': [{'id': p.id, 'evidence_id': p.evidence_id, 'status': p.status,
-                'processor': p.processor, 'version': p.processor_version, 'error_code': p.error_code,
-                'observation_count': p.observation_count, 'partial': p.is_partial} for p in processing],
-            'observations': [{'id': o.id, 'type': o.observation_type, 'data': o.data,
-                              'partial': o.is_partial, 'evidence_id': o.evidence_id} for o in observations],
-            'events': [{'id': e.id, 'event': e.event_type, 'reason_code': e.reason_code,
-                        'occurred_at': e.occurred_at, 'attempt_id': e.attempt_id} for e in events]}
+        'dispatch_status': 'requires_fresh_authorization',
+        'attempts': sorted(attempts or [], key=lambda a: a['attempt_number']),
+        'evidence': sorted(evidence or [], key=lambda e: (e['collected_at'], e['id'])),
+        'processing': processing or [],
+        'observations': sorted(observations or [], key=lambda o: o['id']),
+        'events': sorted(events or [], key=lambda e: (e['occurred_at'], e['id']))}
+
+
+@router.get('/executions/{execution_id}/evidence/{evidence_id}')
+def original_evidence(assessment_id: UUID, execution_id: UUID, evidence_id: UUID,
+                      user: User = Depends(analyst), db: Session = Depends(get_db)):
+    source = db.scalar(select(ScannerEvidence)
+        .join(BaselineExecutionRequest, and_(BaselineExecutionRequest.id == ScannerEvidence.request_id,
+            BaselineExecutionRequest.assessment_id == ScannerEvidence.assessment_id,
+            BaselineExecutionRequest.target_id == ScannerEvidence.target_id,
+            BaselineExecutionRequest.tool == ScannerEvidence.tool))
+        .join(ExecutionAttempt, and_(ExecutionAttempt.id == ScannerEvidence.attempt_id,
+            ExecutionAttempt.request_id == ScannerEvidence.request_id,
+            ExecutionAttempt.assessment_id == ScannerEvidence.assessment_id,
+            ExecutionAttempt.target_id == ScannerEvidence.target_id))
+        .join(Assessment, Assessment.id == ScannerEvidence.assessment_id)
+        .where(Assessment.id == assessment_id, accessible(user), ScannerEvidence.id == evidence_id,
+               BaselineExecutionRequest.id == execution_id))
+    if source is None:
+        raise HTTPException(404)
+    from .config import get_settings
+    from .evidence_reading import EvidenceUnavailable, read_original
+    try:
+        content = read_original(source, get_settings().evidence_read_directory)
+    except EvidenceUnavailable:
+        raise HTTPException(503, detail={'code': 'original_evidence_unavailable'}) from None
+    return {'assessment_id': assessment_id, 'execution_id': execution_id, 'evidence_id': evidence_id,
+            'sha256': source.content_hash, 'size_bytes': source.size_bytes, 'format': source.format,
+            'partial': source.is_partial, 'content': content}
 
 
 # Recommendations — read-only endpoints.

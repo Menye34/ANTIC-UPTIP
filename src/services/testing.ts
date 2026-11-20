@@ -23,6 +23,9 @@ export interface TestingData {
   counts: { total: number; queued: number; in_progress: number; completed: number; failed: number; stopped: number; blocked: number; cancelled: number }
   executions: Execution[]
   authorization_scope: {
+    boundaries?: Array<{ value: string; kind: string }> | null
+    scope_current?: boolean
+    authorized_by?: { id: string; username: string; confirmed_at: string } | null
     authorization_id: string | null
     scope_revision: number | null
     scope_digest: string | null
@@ -31,6 +34,7 @@ export interface TestingData {
     excluded_activities: unknown[]
     excluded_targets: unknown[]
   }
+  discovery_totals?: { open_ports: number | null; services: number | null; web_targets: number | null }
   discovered_so_far: Array<{ id: string; execution_id: string; target_id: string; type: string; data: Record<string, unknown>; partial: boolean }>
   recent_activity: Array<{ event: string; execution_id: string; occurred_at: string }>
 }
@@ -63,6 +67,16 @@ export async function getTesting(assessmentId: string, signal: AbortSignal) {
       || !result.authorization_scope || !Array.isArray(result.discovered_so_far) || !Array.isArray(result.recent_activity)) {
     throw new Error('Invalid Testing response')
   }
+  const totals = result.discovery_totals
+  const scope = result.authorization_scope
+  if ((totals !== undefined && (!totals || ['open_ports', 'services', 'web_targets'].some(key => {
+    const value = totals[key as keyof typeof totals]
+    return value !== null && (!Number.isInteger(value) || value < 0)
+  }))) || (scope.boundaries != null && (!Array.isArray(scope.boundaries)
+    || scope.boundaries.some(b => typeof b.value !== 'string' || typeof b.kind !== 'string')))
+    || (scope.authorized_by != null && (typeof scope.authorized_by.id !== 'string'
+      || typeof scope.authorized_by.username !== 'string' || !scope.authorized_by.username
+      || !Number.isFinite(Date.parse(scope.authorized_by.confirmed_at))))) throw new Error('Invalid Testing context')
   const rowCounts = executionStates.map(status => result.executions.filter(row => row.status === status).length)
   if (rowCounts.some((count, i) => count !== result.counts[keys[i]])) throw new Error('Inconsistent Testing counts')
   return result
@@ -73,6 +87,23 @@ export async function getExecutionDetails(assessmentId: string, executionId: str
   if (!validExecution(result) || result.id !== executionId || !Array.isArray(result.attempts)
       || !Array.isArray(result.evidence) || !Array.isArray(result.processing) || !Array.isArray(result.observations)
       || !Array.isArray(result.events)) throw new Error('Invalid execution details')
+  const nullableText = (value: unknown) => value === null || typeof value === 'string'
+  if (typeof result.dispatch_status !== 'string'
+    || result.attempts.some(a => !a || typeof a.id !== 'string' || !Number.isInteger(a.attempt_number)
+      || a.attempt_number < 1 || typeof a.status !== 'string' || !nullableText(a.reason_code)
+      || !nullableText(a.started_at) || !nullableText(a.finished_at) || !nullableText(a.recovery_reason))
+    || result.evidence.some(e => !e || typeof e.id !== 'string' || typeof e.format !== 'string'
+      || !Number.isInteger(e.size_bytes) || e.size_bytes < 0 || e.size_bytes > 10 * 1024 * 1024
+      || typeof e.partial !== 'boolean' || !/^[a-f0-9]{64}$/.test(e.sha256)
+      || !Number.isFinite(Date.parse(e.collected_at)))
+    || result.processing.some(p => !p || typeof p.id !== 'string' || typeof p.status !== 'string'
+      || typeof p.processor !== 'string' || typeof p.version !== 'string'
+      || !Number.isInteger(p.observation_count) || p.observation_count < 0 || typeof p.partial !== 'boolean')
+    || result.observations.some(o => !o || typeof o.id !== 'string' || typeof o.type !== 'string'
+      || !o.data || typeof o.data !== 'object' || Array.isArray(o.data)
+      || typeof o.partial !== 'boolean' || typeof o.evidence_id !== 'string')
+    || result.events.some(e => !e || typeof e.id !== 'string' || typeof e.event !== 'string'
+      || !Number.isFinite(Date.parse(e.occurred_at)))) throw new Error('Invalid execution details')
   return result
 }
 
@@ -181,4 +212,20 @@ export async function getRecommendationCheck(assessmentId: string, recommendatio
       || !Array.isArray(result.available_profiles) || result.available_profiles.length !== 0
       || typeof result.reason_code !== 'string') throw new Error('Invalid recommendation review')
   return result
+}
+
+export interface OriginalEvidence {
+  assessment_id: string; execution_id: string; evidence_id: string
+  sha256: string; size_bytes: number; format: string; partial: boolean; content: string
+}
+export async function getOriginalEvidence(assessmentId: string, executionId: string,
+  source: ExecutionDetails['evidence'][number], signal: AbortSignal) {
+  const value = await startRequest<OriginalEvidence>(assessmentId,
+    '/testing/executions/' + encodeURIComponent(executionId) + '/evidence/' + encodeURIComponent(source.id), signal)
+  if (value.assessment_id !== assessmentId || value.execution_id !== executionId || value.evidence_id !== source.id
+    || typeof value.content !== 'string' || value.sha256 !== source.sha256 || !/^[a-f0-9]{64}$/.test(value.sha256)
+    || value.size_bytes !== source.size_bytes || !Number.isInteger(value.size_bytes) || value.size_bytes < 0
+    || value.size_bytes > 10 * 1024 * 1024 || new TextEncoder().encode(value.content).byteLength !== value.size_bytes
+    || value.format !== source.format || value.partial !== source.partial) throw new Error('Invalid original evidence response')
+  return value
 }

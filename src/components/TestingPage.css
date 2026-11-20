@@ -223,3 +223,14 @@
 .testing-service-form select, .testing-service-form input:not([type="checkbox"]) { width: 100%; min-height: 40px; border: 1px solid var(--dash-border); border-radius: 6px; padding: 8px 12px; background: white; color: var(--dash-text); font: inherit; }
 .testing-service-form .testing-service-consent { display: flex; align-items: start; gap: 10px; }
 .testing-service-actions { display: flex; justify-content: end; flex-wrap: wrap; gap: 12px; }
+
+/* T-02 uses the same right-hand read-only drawer geometry as T-04C. */
+.testing-execution-drawer .testing-detail-summary { display: block; }
+.testing-execution-drawer .testing-detail-summary p { margin-top: 6px; }
+.testing-execution-drawer table { width: 100%; table-layout: fixed; border: 1px solid #e2e8f0; border-radius: 6px; margin-top: 12px; }
+.testing-execution-drawer th, .testing-execution-drawer td { text-align: left; padding: 10px 8px; overflow-wrap: anywhere; font-size: 12px; }
+.testing-execution-drawer th { background: #f8fafc; }
+.testing-execution-drawer details { margin: 24px 0; }
+.testing-original-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; font-size: 12px; }
+.testing-proposed-fields { grid-template-columns: minmax(0,2fr) minmax(0,1fr); margin-bottom: 16px; }
+.testing-review-footer .testing-review-accept:not(:disabled) { background: #2563eb; border-color: #2563eb; color: white; }

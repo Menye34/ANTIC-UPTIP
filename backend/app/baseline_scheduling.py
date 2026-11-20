@@ -68,10 +68,9 @@ def queued_requests(db, authorization_id):
 def queue_scoped_service(db, authorization, activity, requests):
     """Reuse existing consent/dispatch pipeline within the atomic Start transaction."""
     from datetime import timedelta, timezone
-    from .models import ServiceDiscoveryConsent, ExecutionEvent
+    from .models import ServiceDiscoveryConsent
     from .baseline_catalog import fingerprint
-    from .service_start_preparation import validate
-    from .scope_ports import authorized_ports
+    from .service_start_preparation import validate, ports_for
     from .service_discovery import preparation
     prep = activity.get('scheduling_preparation')
     if (not validate(prep) or activity.get('status') != 'resolved'
@@ -86,7 +85,7 @@ def queue_scoped_service(db, authorization, activity, requests):
                  and r.profile_id == 'network-discovery'), None)
     if host is None or host.authorized_activity['scheduling_preparation'] != prep['host_preparation']:
         raise ValueError('Authorized host preparation required')
-    ports = authorized_ports(db, authorization.assessment_id, prep['target_value'])
+    ports = ports_for(db, authorization.assessment_id, prep['target_value'], prep['scheduling_policy']['version'])
     if ports != prep['authorized_tcp_ports']:
         raise ValueError('Authorized ports changed')
     db.flush()
@@ -112,9 +111,9 @@ def queue_scoped_service(db, authorization, activity, requests):
     db.add(ServiceDiscoveryConsent(request_id=row.id, assessment_id=authorization.assessment_id,
         target_id=host.target_id, actor_id=authorization.actor_id, idempotency_key=row.id,
         snapshot=snapshot, digest=digest, created_at=now, expires_at=expiry))
-    db.add(ExecutionEvent(request_id=row.id, assessment_id=row.assessment_id, target_id=row.target_id,
-        actor_id=authorization.actor_id, operation_id=row.id, event_type='service_discovery_confirmed',
-        reason_code='start_explicit_scoped_ports', details={'consent_digest': digest,
-        'policy_digest': current['policy']['digest']}, occurred_at=now))
+    # The existing AssessmentStartEvent audits this transaction. The immutable
+    # consent binds its authorization, actor, timestamp and reviewed policy.
+    # ExecutionEvent is worker-owned history: the web app must not impersonate
+    # a worker or require INSERT privileges on that table to schedule work.
     db.flush()
     return row

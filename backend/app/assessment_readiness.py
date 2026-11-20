@@ -294,25 +294,25 @@ def evaluate_readiness(db, assessment):
                 profile_digest=evaluation.decision.get('profile', {}).get('digest') if evaluation else None,
                 required_capability='ipv4-discovery' if prep else None,
             )
-        from .scope_ports import authorized_ports
-        ports = authorized_ports(db, assessment.id, target.normalized_value) if target.kind == 'IP address' else []
-        if ports:
-            from .service_start_preparation import prepare as service_prepare
+        if target.kind == 'IP address':
+            from .service_start_preparation import prepare as service_prepare, ports_for
+            ports = ports_for(db, assessment.id, target.normalized_value)
             from .nmap_service_profile import CAPABILITY
             host = next((a for a in activities if a['profile_id'] == 'network-discovery'), None)
             service = {**host, 'profile_id': 'service-discovery', 'activity': 'Service Discovery', 'version': 1} if host else None
             if service is not None:
                 tool = states.get('Nmap')
-                allowed = host['scheduling_preparation'] is not None and tool is not None and CAPABILITY in tool.capabilities
+                allowed = bool(ports and host['scheduling_preparation'] is not None and tool is not None and CAPABILITY in tool.capabilities)
                 prep = service_prepare(host['scheduling_preparation'], ports) if allowed else None
                 service.update(scheduling_preparation=prep, policy_eligible=allowed, start_review_eligible=allowed,
                     required_capability=CAPABILITY, profile_digest=prep['profile_digest'] if prep else None,
                     policy_dependencies=['network-discovery'],
                     policy={'disposition': 'preauthorized' if allowed else 'blocked',
-                            'rule_id': 'schedule-explicit-ipv4-tcp-v1' if allowed else None,
+                            'rule_id': 'schedule-fixed-web-tcp-v2' if allowed else None,
                             'reason_code': 'scoped_service_plan_verified' if allowed else 'service_preparation_unavailable',
-                            'reason': 'Explicitly scoped TCP service plan verified for scheduling.' if allowed else
-                                      'Current host baseline and enabled TCP service-discovery capability are required.'})
+                            'reason': 'System-prepared restricted HTTP/HTTPS service plan verified for Start review.' if allowed else
+                                      ('Existing TCP scope restrictions exclude the baseline ports.' if not ports else
+                                       'Current host baseline and enabled TCP service-discovery capability are required.')})
                 activities.append(service)
         eligible = any(item['start_review_eligible'] for item in activities)
         if not activities:

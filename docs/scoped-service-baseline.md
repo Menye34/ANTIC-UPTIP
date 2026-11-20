@@ -1,4 +1,7 @@
-# Explicit scoped service discovery during Start
+# Explicit scoped service discovery during Start (historical version 1)
+
+> Superseded for new assessments by [automatic service baseline](automatic-service-baseline.md).
+> The manual-port workflow below describes the earlier implementation, not the current UI.
 
 This additive path reuses Start Assessment and the existing service-discovery
 worker/consent pipeline. It introduces no new Testing screen or automatic tool

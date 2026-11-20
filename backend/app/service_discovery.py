@@ -98,8 +98,7 @@ def verify_service(db, request, *, attempt=None, worker_id=None, claim_id=None):
     assessment = db.get(Assessment, request.assessment_id)
     require(assessment is not None and assessment.creator_id == consent.actor_id, 'service_actor_invalid')
     if saved.get('source') == 'assessment_start':
-        from .scope_ports import authorized_ports
-        from .service_start_preparation import validate
+        from .service_start_preparation import validate, ports_for
         from .models import AssessmentStartAuthorization
         reviewed = saved.get('reviewed_preparation')
         auth = db.get(AssessmentStartAuthorization, request.authorization_id)
@@ -109,7 +108,8 @@ def verify_service(db, request, *, attempt=None, worker_id=None, claim_id=None):
         require(validate(reviewed) and len(matches) == 1
                 and matches[0].get('scheduling_preparation') == reviewed
                 and reviewed['plan'] == prep['plan']
-                and authorized_ports(db, request.assessment_id, prep['plan']['target']) == prep['plan']['ports'],
+                and ports_for(db, request.assessment_id, prep['plan']['target'],
+                              reviewed['scheduling_policy']['version']) == prep['plan']['ports'],
                 'start_service_scope_binding_invalid')
         if host.status in ('Queued', 'Running'):
             from .dispatch_verification import DispatchDeferred
