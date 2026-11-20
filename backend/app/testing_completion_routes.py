@@ -130,6 +130,10 @@ def complete(assessment_id: UUID, body: CompleteBody, request: Request,
         snapshot=receipt_snapshot(review, state),
     )
     db.add(event)
+    # Finalize supported consolidated findings in the same locked transaction.
+    # Discovery facts alone produce no vulnerability findings.
+    from .findings_processing import consolidate
+    consolidate(db, assessment_id)
     assessment.status = 'Finding Review'
     db.flush()
     result, _ = review_state(db, assessment_id, user)
