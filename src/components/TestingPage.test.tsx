@@ -381,6 +381,7 @@ it('shows receipt-backed completion and navigates to assessment Findings', async
   const dialog = screen.getByRole('dialog')
   fireEvent.click(within(dialog).getByRole('button', { name: 'Complete Testing' }))
   expect(await screen.findByRole('heading', { name: 'Testing Completed' })).toBeVisible()
+  expect(screen.queryByRole('button', { name: 'Run Manual Test' })).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeEnabled()
   fireEvent.click(screen.getByRole('button', { name: 'Continue to Findings' }))
   expect(onFindings).toHaveBeenCalledTimes(1)
