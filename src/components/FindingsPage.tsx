@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { AssessmentRequestError, getAssessment } from '../services/assessments'
 import type { Assessment } from '../services/assessments'
 import './FindingsPage.css'
+import { getFindingsOverview, getFindingDetail } from '../services/findings'
+import type { FindingSummary, FindingDetail } from '../services/findings'
 
 export type FindingSeverity = 'Critical' | 'High' | 'Medium' | 'Low'
 export type ConsolidatedFinding = {
@@ -12,13 +14,20 @@ export type ConsolidatedFinding = {
 type Props = {
   assessmentId: string; onExpired: () => void; onTesting: () => void
   findingId?: string; onFinding?: (id: string) => void; onBack?: () => void
-  /** Frontend-only input seam. Production leaves this empty until a verified Findings API exists. */
+  /** Optional test fixture; production fetches assessment-scoped findings from the API. */
   findings?: ConsolidatedFinding[]
 }
 const levels: FindingSeverity[] = ['Critical', 'High', 'Medium', 'Low']
 
-export default function FindingsPage({ assessmentId, onExpired, onTesting, findingId, onFinding, onBack, findings = [] }: Props) {
+export default function FindingsPage({ assessmentId, onExpired, onTesting, findingId, onFinding, onBack, findings: suppliedFindings }: Props) {
   const [assessment, setAssessment] = useState<Assessment>()
+  const [apiFindings, setApiFindings] = useState<ConsolidatedFinding[]>([])
+  const [findingDetail, setFindingDetail] = useState<ConsolidatedFinding>()
+  const [findingsLoading, setFindingsLoading] = useState(true)
+  const [findingsError, setFindingsError] = useState('')
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
+  const findings = suppliedFindings ?? apiFindings
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   const [search, setSearch] = useState('')
@@ -44,10 +53,64 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
     return () => controller.abort()
   }, [assessmentId, onExpired, retry])
 
+  useEffect(() => {
+    if (suppliedFindings !== undefined) {
+      setFindingsLoading(false)
+      setFindingsError('')
+      return
+    }
+    const controller = new AbortController()
+    setApiFindings([])
+    setFindingsLoading(true)
+    setFindingsError('')
+    void getFindingsOverview(assessmentId, controller.signal).then(result => {
+      if (controller.signal.aborted) return
+      if (result.total !== result.findings.length) throw new Error('Inconsistent findings count')
+      setApiFindings(result.findings.map((f: FindingSummary) => ({
+        id: f.id, title: f.title, severity: f.severity, affectedTarget: f.affected_target,
+        source: f.source, sourceTest: '', description: '', impact: '',
+        securityControl: '', observedCondition: '', detectedIssue: '', remediation: '',
+      })))
+    }).catch((failure: unknown) => {
+      if (controller.signal.aborted) return
+      if (failure instanceof AssessmentRequestError && failure.status === 401) onExpired()
+      setFindingsError('Unable to load verified findings. Please retry.')
+    }).finally(() => { if (!controller.signal.aborted) setFindingsLoading(false) })
+    return () => controller.abort()
+  }, [assessmentId, onExpired, retry, suppliedFindings])
+
+  useEffect(() => {
+    if (!findingId || suppliedFindings !== undefined) {
+      setFindingDetail(undefined)
+      setDetailLoading(false)
+      setDetailError('')
+      return
+    }
+    const controller = new AbortController()
+    setFindingDetail(undefined)
+    setDetailLoading(true)
+    setDetailError('')
+    void getFindingDetail(assessmentId, findingId, controller.signal).then((f: FindingDetail) => {
+      if (controller.signal.aborted) return
+      setFindingDetail({
+        id: f.id, title: f.title, severity: f.severity, affectedTarget: f.affected_target,
+        source: f.source, sourceTest: f.source_test, description: f.description,
+        impact: f.impact, securityControl: f.security_control,
+        observedCondition: f.observed_condition, detectedIssue: f.detected_issue,
+        remediation: f.remediation,
+      })
+    }).catch((failure: unknown) => {
+      if (controller.signal.aborted) return
+      if (failure instanceof AssessmentRequestError && failure.status === 401) onExpired()
+      setDetailError('Unable to load finding details. Please retry.')
+    }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false) })
+    return () => controller.abort()
+  }, [assessmentId, findingId, onExpired, retry, suppliedFindings])
+
   const filtered = useMemo(() => findings.filter(f =>
     (!search || [f.title, f.affectedTarget].some(v => v.toLowerCase().includes(search.toLowerCase()))) &&
     (!severity || f.severity === severity) && (!source || f.source === source)), [findings, search, severity, source])
-  const selected = findings.find(f => f.id === findingId)
+  const selected = suppliedFindings !== undefined ? findings.find(f => f.id === findingId) : findingDetail
   const sources = [...new Set(findings.map(f => f.source))]
   const inReview = assessment?.status === 'Finding Review'
   const openQuestion = (value: string) => { setSelectedQuestion(value); setQuestion('') }
@@ -59,7 +122,7 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
 
   if (findingId) return <div className="findings-detail">
     <button type="button" className="findings-text-button" onClick={goBack}>← Back to Findings</button>
-    {!selected ? <section className="analyst-card" role="alert">
+    {detailLoading ? <p role="status">Loading finding details…</p> : detailError ? <section className="analyst-card" role="alert"><p>{detailError}</p><button type="button" onClick={() => setRetry(n => n + 1)}>Retry</button></section> : !selected ? <section className="analyst-card" role="alert">
       <h1>Finding unavailable</h1><p>This finding could not be verified for the assessment.</p></section> : <>
       <header className="findings-detail-heading"><h1>{selected.title}</h1><span className={`findings-severity ${selected.severity.toLowerCase()}`}>{selected.severity}</span></header>
       <section className="analyst-card"><h2>Finding Information</h2><dl className="findings-fields three">
@@ -111,7 +174,7 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
       <p>Explore consolidated security findings, inspect supporting evidence, and prepare findings for reporting.</p></div>
       <button type="button" className="analyst-create" onClick={() => setManualOpen(true)}>+ Add Manual Finding</button></header>
     {!inReview && <p className="findings-lifecycle" role="status">This assessment has not yet reached Finding Review. Current status: {assessment.status}.</p>}
-    <div className="findings-metrics">{(['Total Findings', ...levels] as const).map(label => {
+    {findingsLoading ? <p role="status">Loading verified findings…</p> : findingsError ? <section className="analyst-card" role="alert"><p>{findingsError}</p><button type="button" onClick={() => setRetry(n => n + 1)}>Retry</button></section> : <><div className="findings-metrics">{(['Total Findings', ...levels] as const).map(label => {
       const count = label === 'Total Findings' ? findings.length : findings.filter(f => f.severity === label).length
       return <section className="analyst-card" key={label}><span>{label}</span><strong>{count}</strong>
         <small>{label === 'Total Findings' ? 'All consolidated findings' : `${label}-severity findings`}</small></section>
@@ -135,9 +198,10 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
           <button type="button" disabled title="Report integration is not available yet">Go to Report →</button></footer>
       </> : <div className="findings-empty"><div className="findings-empty-icon" aria-hidden="true">◇</div>
         <h3>No findings yet</h3><p>Findings from security tests will appear here once available. You can also add a finding manually.</p>
-        <small>{inReview ? 'Consolidated finding data has not yet been connected to this screen.' : 'Run tests from Testing or use Add Manual Finding to record an observation.'}</small>
+        <small>{inReview ? 'No consolidated security issues were recorded for this assessment.' : 'Run tests from Testing or use Add Manual Finding to record an observation.'}</small>
         {!inReview && <button type="button" className="findings-text-button" onClick={onTesting}>Go to Testing</button>}</div>}
     </section>
+    </>}
     {manualOpen && <div className="findings-overlay" onClick={() => setManualOpen(false)}><section role="dialog" aria-modal="true" aria-label="Add Manual Finding" className="findings-manual-dialog" onClick={event => event.stopPropagation()}>
       <h2>Add Manual Finding</h2><p>Manual finding creation is not connected to the backend yet. No finding will be saved or added to the consolidated list.</p>
       <button type="button" onClick={() => setManualOpen(false)}>Close</button></section></div>}
