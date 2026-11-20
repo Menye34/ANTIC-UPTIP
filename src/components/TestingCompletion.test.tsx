@@ -250,7 +250,7 @@ it('keeps uncertain completion locked across a remount and Testing readback unti
 it('restores persisted completion on a fresh mount without POST or invented actor names', async () => {
   const { fetcher } = setup(completedCompletionReview())
   expect(await screen.findByRole('heading', { name: 'Testing Completed' })).toBeVisible()
-  expect(screen.queryByText(/synthetic-completion-actor/)).not.toBeInTheDocument()
+  expect(screen.getByText(/by analyst ID synthetic-completion-actor/)).toBeVisible()
   expect(screen.queryByRole('button', { name: 'Complete Testing' })).not.toBeInTheDocument()
   expect(fetcher.mock.calls.every(([, options]) => !options?.method)).toBe(true)
 })
