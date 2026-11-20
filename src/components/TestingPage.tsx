@@ -386,8 +386,8 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '', onFindings
     <nav aria-label="Breadcrumb">Testing</nav>
     <header className="testing-heading"><div><h1>Testing</h1>
       <p>Run security tests, check recommendations, and review your testing progress.</p></div>
-      <button type="button" className="analyst-create testing-manual" disabled title="Manual testing is unavailable in this release">
-        <img src={plus} alt="" />Run Manual Test</button>
+      {!(activeTab === 'completion' && completionOperation.phase === 'confirmed') && <button type="button" className="analyst-create testing-manual" disabled title="Manual testing is unavailable in this release">
+        <img src={plus} alt="" />Run Manual Test</button>}
     </header>
     <div className="testing-tabs" role="tablist" aria-label="Testing views">
       <button type="button" role="tab" id="test-activity-tab" aria-selected={activeTab === 'activity'} aria-controls="test-activity-panel" onClick={() => setActiveTab('activity')}>Test Activity</button>
