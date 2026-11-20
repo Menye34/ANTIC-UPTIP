@@ -401,7 +401,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '', onFindings
     {data && <ServiceDiscoveryScheduling data={data} visible={activeTab === 'activity'} available={!error}
       csrfToken={csrfToken} onExpired={onExpired} onChanged={() => setRetry(n => n + 1)} />}
     {data && <div role="tabpanel" id={activeTab === 'activity' ? 'test-activity-panel' : activeTab === 'recommendations' ? 'recommendations-panel' : 'testing-completion-panel'} aria-labelledby={activeTab === 'activity' ? 'test-activity-tab' : activeTab === 'recommendations' ? 'recommendations-tab' : 'testing-completion-tab'} className="testing-panel">
-      {activeTab === 'completion' ? <TestingCompletion currentAnalyst={currentAnalyst} assessmentId={assessmentId} csrfToken={csrfToken} operation={completionOperation} onOperationChange={setCompletionOperation} onExpired={onExpired} onDecisionsChanged={invalidateRecommendations} onContinue={() => setActiveTab('activity')} onFindings={() => onFindings?.()} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
+      {activeTab === 'completion' ? <TestingCompletion currentAnalyst={currentAnalyst} assessmentId={assessmentId} csrfToken={csrfToken} operation={completionOperation} onOperationChange={setCompletionOperation} onExpired={onExpired} onDecisionsChanged={invalidateRecommendations} onContinue={() => setActiveTab('activity')} onFindings={onFindings} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
         <div className="testing-metrics">{[
           ['Total Tests', data.counts.total], ['In Progress', data.counts.in_progress],
           ['Completed', data.counts.completed], ['Failed', data.counts.failed],
