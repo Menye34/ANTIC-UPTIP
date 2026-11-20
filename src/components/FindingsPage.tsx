@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AssessmentRequestError, getAssessment } from '../services/assessments'
 import type { Assessment } from '../services/assessments'
 import './FindingsPage.css'
@@ -20,6 +20,9 @@ type Props = {
 const levels: FindingSeverity[] = ['Critical', 'High', 'Medium', 'Low']
 
 export default function FindingsPage({ assessmentId, onExpired, onTesting, findingId, onFinding, onBack, findings: suppliedFindings }: Props) {
+  const expiredReported = useRef(false)
+  const reportExpiry = () => { if (!expiredReported.current) { expiredReported.current = true; onExpired() } }
+  useEffect(() => { expiredReported.current = false }, [assessmentId])
   const [assessment, setAssessment] = useState<Assessment>()
   const [apiFindings, setApiFindings] = useState<ConsolidatedFinding[]>([])
   const [findingDetail, setFindingDetail] = useState<ConsolidatedFinding>()
@@ -46,7 +49,7 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
       if (!controller.signal.aborted) setAssessment(result)
     }).catch((failure: unknown) => {
       if (controller.signal.aborted) return
-      if (failure instanceof AssessmentRequestError && failure.status === 401) onExpired()
+      if (failure instanceof AssessmentRequestError && failure.status === 401) reportExpiry()
       setError(failure instanceof AssessmentRequestError && [403, 404].includes(failure.status)
         ? 'Assessment unavailable.' : 'Unable to load the assessment. Try again.')
     })
@@ -65,7 +68,10 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
     setFindingsError('')
     void getFindingsOverview(assessmentId, controller.signal).then(result => {
       if (controller.signal.aborted) return
-      if (result.total !== result.findings.length) throw new Error('Inconsistent findings count')
+      if (!Array.isArray(result.findings) || result.total !== result.findings.length ||
+          result.findings.some(f => !f || typeof f.id !== 'string' || typeof f.title !== 'string' ||
+            typeof f.affected_target !== 'string' || typeof f.source !== 'string' ||
+            !levels.includes(f.severity))) throw new Error('Invalid findings response')
       setApiFindings(result.findings.map((f: FindingSummary) => ({
         id: f.id, title: f.title, severity: f.severity, affectedTarget: f.affected_target,
         source: f.source, sourceTest: '', description: '', impact: '',
@@ -73,7 +79,7 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
       })))
     }).catch((failure: unknown) => {
       if (controller.signal.aborted) return
-      if (failure instanceof AssessmentRequestError && failure.status === 401) onExpired()
+      if (failure instanceof AssessmentRequestError && failure.status === 401) reportExpiry()
       setFindingsError('Unable to load verified findings. Please retry.')
     }).finally(() => { if (!controller.signal.aborted) setFindingsLoading(false) })
     return () => controller.abort()
@@ -92,6 +98,9 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
     setDetailError('')
     void getFindingDetail(assessmentId, findingId, controller.signal).then((f: FindingDetail) => {
       if (controller.signal.aborted) return
+      if (!f || typeof f.id !== 'string' || typeof f.title !== 'string' ||
+          typeof f.affected_target !== 'string' || typeof f.source !== 'string' ||
+          !levels.includes(f.severity)) throw new Error('Invalid finding detail')
       setFindingDetail({
         id: f.id, title: f.title, severity: f.severity, affectedTarget: f.affected_target,
         source: f.source, sourceTest: f.source_test, description: f.description,
@@ -101,17 +110,18 @@ export default function FindingsPage({ assessmentId, onExpired, onTesting, findi
       })
     }).catch((failure: unknown) => {
       if (controller.signal.aborted) return
-      if (failure instanceof AssessmentRequestError && failure.status === 401) onExpired()
-      setDetailError('Unable to load finding details. Please retry.')
+      if (failure instanceof AssessmentRequestError && failure.status === 401) reportExpiry()
+      setDetailError(failure instanceof AssessmentRequestError && failure.status === 404
+        ? 'Finding unavailable for this assessment.' : 'Unable to load finding details. Please retry.')
     }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false) })
     return () => controller.abort()
   }, [assessmentId, findingId, onExpired, retry, suppliedFindings])
 
   const filtered = useMemo(() => findings.filter(f =>
-    (!search || [f.title, f.affectedTarget].some(v => v.toLowerCase().includes(search.toLowerCase()))) &&
+    (!search || [f.title, f.affectedTarget].some(v => typeof v === 'string' && v.toLowerCase().includes(search.toLowerCase()))) &&
     (!severity || f.severity === severity) && (!source || f.source === source)), [findings, search, severity, source])
   const selected = suppliedFindings !== undefined ? findings.find(f => f.id === findingId) : findingDetail
-  const sources = [...new Set(findings.map(f => f.source))]
+  const sources = [...new Set(findings.map(f => f.source).filter((value): value is string => typeof value === 'string'))]
   const inReview = assessment?.status === 'Finding Review'
   const openQuestion = (value: string) => { setSelectedQuestion(value); setQuestion('') }
   const goBack = () => { setAssistantOpen(false); setSelectedQuestion(''); onBack?.() }
