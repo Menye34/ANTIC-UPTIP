@@ -90,7 +90,7 @@ it('renders F-02 details and an unavailable AI state without fabricated advice',
   expect(screen.getByText('Original Tool Output').closest('details')).not.toHaveAttribute('open')
   fireEvent.click(screen.getByRole('button', { name: 'Ask AI About This Finding' }))
   expect(screen.getByRole('dialog', { name: 'AI Assistant' })).toBeVisible()
-  fireEvent.click(screen.getByRole('button', { name: 'Suggest a fix' }))
+  fireEvent.click(screen.getByRole('button', { name: /Suggest a fix/ }))
   expect(screen.getByText('AI Assistant is unavailable')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: 'Close AI Assistant' }))
   fireEvent.click(screen.getByRole('button', { name: /Back to Findings/ }))
@@ -149,4 +149,25 @@ it('loads F-02 details from the assessment-scoped API', async () => {
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
     '/api/v1/assessments/' + assessment.id + '/findings/' + sample.id,
     expect.objectContaining({ credentials: 'same-origin' })))
+})
+
+it('rejects malformed findings without crashing or displaying misleading counts', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => reply(url.endsWith('/findings')
+    ? { assessment_id: assessment.id, lifecycle_status: 'Finding Review', total: 1,
+        findings: [{ id: 'bad', severity: 'Medium', source: 'Nmap' }] }
+    : assessment)))
+  renderPage()
+  expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load verified findings')
+  expect(screen.queryByText('No findings yet')).not.toBeInTheDocument()
+})
+
+it('distinguishes an unavailable F-02 finding from a temporary failure', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/findings/missing')
+    ? reply({}, 404)
+    : reply(url.endsWith('/findings')
+      ? { assessment_id: assessment.id, lifecycle_status: 'Finding Review', total: 0, findings: [] }
+      : assessment)))
+  render(<FindingsPage assessmentId={assessment.id} onExpired={expired}
+    onTesting={back} findingId="missing" />)
+  expect(await screen.findByText('Finding unavailable for this assessment.')).toBeVisible()
 })
