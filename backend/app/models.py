@@ -2,7 +2,7 @@ from datetime import date, datetime
 import json
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, Sequence, String, Text, UniqueConstraint, event, func
+from sqlalchemy import ARRAY, JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, Sequence, String, Text, UniqueConstraint, event, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -106,7 +106,9 @@ class ScopeEntry(Base):
     __table_args__ = (
         UniqueConstraint('assessment_id', 'normalized_value', name='uq_scope_entry_value'),
         CheckConstraint("kind IN ('IP address', 'Subnet', 'Hostname', 'Web URL')", name='ck_scope_entry_kind'),
+        CheckConstraint("cardinality(tcp_ports) <= 16 AND array_position(tcp_ports, NULL) IS NULL AND 0 < ALL(tcp_ports) AND 65536 > ALL(tcp_ports) AND (cardinality(tcp_ports) = 0 OR kind = 'IP address')", name='ck_scope_tcp_ports'),
     )
+    tcp_ports: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list, server_default='{}')
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     assessment_id: Mapped[UUID] = mapped_column(ForeignKey('assessments.id', ondelete='CASCADE'))
     normalized_value: Mapped[str] = mapped_column(String(1024))

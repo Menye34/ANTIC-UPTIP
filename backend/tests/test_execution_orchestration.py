@@ -379,7 +379,7 @@ def test_migration_refuses_removing_recorded_process_protection(scheduling_concu
     app, factory, _, _, _ = scheduling_concurrency
     config = Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
     config.set_main_option('script_location', str(Path(__file__).resolve().parents[1]/'migrations'))
-    command.upgrade(config, '0019')
+    command.upgrade(config, 'head')
     with factory() as db, TestClient(app, base_url='https://testserver') as client:
         client.headers['Origin'] = 'https://testserver'
         path, headers, _ = prepared.__wrapped__(client, db, monkeypatch)
@@ -392,7 +392,7 @@ def test_migration_refuses_removing_recorded_process_protection(scheduling_concu
     with pytest.raises(DBAPIError, match='recorded history'):
         command.downgrade(config, '0018')
     with factory() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '0019'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '0025'
         assert db.get(ExecutionAttempt, aid).process_reference == 'synthetic:123:456'
 
 

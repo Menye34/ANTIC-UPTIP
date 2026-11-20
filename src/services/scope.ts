@@ -2,6 +2,7 @@ export interface ScopeEntry {
   id: string
   value: string
   kind: string
+  tcp_ports?: number[]
 }
 
 export interface ScopeList {
@@ -29,6 +30,7 @@ export async function requestScope(assessmentId: string, signal: AbortSignal, mu
   csrf: string
   revision: number
   value?: string
+  tcp_ports?: number[]
 }) {
   const path = '/api/v1/assessments/' + encodeURIComponent(assessmentId) + '/scope'
   const response = await fetch(path + (mutation?.id ? '/' + encodeURIComponent(mutation.id) : ''), {
@@ -39,7 +41,7 @@ export async function requestScope(assessmentId: string, signal: AbortSignal, mu
       headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': mutation.csrf },
       body: JSON.stringify({
         revision: mutation.revision,
-        ...(mutation.method === 'DELETE' ? { confirmed: true } : { value: mutation.value }),
+        ...(mutation.method === 'DELETE' ? { confirmed: true } : { value: mutation.value, ...(mutation.tcp_ports !== undefined && { tcp_ports: mutation.tcp_ports }) }),
       }),
     }),
   })

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from sqlalchemy import select, text
 
-from .dispatch_verification import DispatchDenied, verify
+from .dispatch_verification import DispatchDeferred, DispatchDenied, verify
 from .execution_results import evidence, process
 from .nmap_adapter import AdapterUnavailable
 from .models import Assessment, BaselineExecutionRequest, ExecutionAttempt, ExecutionEvent
@@ -76,6 +76,10 @@ def claim(factory, request_id, worker_id, timeout):
             return None
         try:
             decision = verify(db, request)
+        except DispatchDeferred:
+            # Pending ordering dependencies are not permanent authorization
+            # failures. Leave the durable request Queued, without an attempt.
+            return None
         except (DispatchDenied, ValueError, KeyError, TypeError) as exc:
             request.status = 'Blocked'
             code = str(exc) if isinstance(exc, DispatchDenied) else 'invalid_dispatch_input'

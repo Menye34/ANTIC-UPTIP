@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -28,6 +28,7 @@ class Revision(BaseModel):
 
 class EntryInput(Revision):
     value: str = Field(max_length=1024)
+    tcp_ports: list[StrictInt] | None = Field(default=None, max_length=16)
 
 
 class Removal(Revision):
@@ -56,7 +57,8 @@ def can_edit(assessment, user):
 
 
 def snapshot(entry):
-    return {'value': entry.normalized_value, 'kind': entry.kind}
+    return {'value': entry.normalized_value, 'kind': entry.kind,
+            **({'tcp_ports': entry.tcp_ports} if entry.tcp_ports else {})}
 
 
 def listing(assessment, user, db):
@@ -98,7 +100,16 @@ def mutate(assessment_id, scope_id, body, request, user, db, action):
             value, kind = normalize(body.value)
         except ValueError:
             return problem(422, 'invalid_entry')
-        if before == {'value': value, 'kind': kind}:
+        from .nmap_service_profile import canonical_ports
+        ports = body.tcp_ports if body.tcp_ports is not None else (entry.tcp_ports if entry else [])
+        try:
+            ports = canonical_ports(ports) if ports else []
+            if ports and kind != 'IP address':
+                raise ValueError('Exact IPv4 scope entry required')
+        except ValueError:
+            return problem(422, 'invalid_tcp_ports')
+        proposed = {'value': value, 'kind': kind, **({'tcp_ports': ports} if ports else {})}
+        if before == proposed:
             # Normalization can turn an edit into a no-op. Keep the current configuration revision.
             return {**listing(assessment, user, db), 'changed': before, 'affected_target_count': 0}
         duplicate = select(ScopeEntry.id).where(
@@ -112,6 +123,7 @@ def mutate(assessment_id, scope_id, body, request, user, db, action):
             db.add(entry)
         entry.normalized_value = value
         entry.kind = kind
+        entry.tcp_ports = ports
         after = snapshot(entry)
     assessment.scope_revision += 1
     db.add(ScopeEvent(assessment_id=assessment_id, revision=assessment.scope_revision, entry_id=entry.id,

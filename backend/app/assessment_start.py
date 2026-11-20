@@ -135,7 +135,11 @@ def snapshot_for(readiness):
                     and prep['scope_digest'] == readiness['scope_digest']
                     and prep['target_revision'] == target['target_revision']
                     and prep['target_value'] == target['value'] and prep['target_kind'] == target['kind']
-                    and item.get('policy_dependencies') == []
+                    and item.get('policy_dependencies') == prep['dependencies']
+                    and (item['profile_id'] != 'service-discovery' or any(
+                        other['profile_id'] == 'network-discovery' and other['start_review_eligible']
+                        and other.get('scheduling_preparation') == prep.get('host_preparation')
+                        for other in target['baseline_activities']))
                     and item.get('profile_digest') == prep['profile_digest']):
                 eligible.append(item)
                 permitted = True

@@ -549,6 +549,9 @@ def test_draft_survives_migration_cycle_and_testing_prevents_downgrade(schedulin
         assert db.scalar(text('SELECT version_num FROM alembic_version'))=='0017'
         assert db.scalar(select(Assessment.status))=='Draft'
         assert db.scalar(select(func.count()).select_from(AssessmentTarget))==1
+    # Current application projections require the current schema. The 0017
+    # checkpoint above verifies historical Draft compatibility independently.
+    command.upgrade(config,'head')
     with TestClient(app,base_url='https://testserver',cookies=cookies) as c:
         c.headers['Origin']='https://testserver'
         review=get_review(c,path)['start_review']
@@ -557,7 +560,7 @@ def test_draft_survives_migration_cycle_and_testing_prevents_downgrade(schedulin
     with pytest.raises(DBAPIError,match='Cannot downgrade'):
         command.downgrade(config,'0011')
     with factory() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='0017'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='0025'
         assert db.scalar(select(Assessment.status))=='Testing'
         for model in (AssessmentStartAuthorization,AssessmentStartEvent,BaselineExecutionRequest):
             assert db.scalar(select(func.count()).select_from(model))==1

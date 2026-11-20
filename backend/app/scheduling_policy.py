@@ -81,6 +81,11 @@ def validate_preparation(facts):
     """Validate persisted scheduling facts again before constructing a queue."""
     if not isinstance(facts, dict):
         return False
+    if not isinstance(facts.get('scheduling_policy'), dict):
+        return False
+    if facts['scheduling_policy'].get('id') == 'uptip-scoped-service-scheduling':
+        from .service_start_preparation import validate
+        return validate(facts)
     try:
         content = {key: value for key, value in facts.items() if key != 'fingerprint'}
         plan = _build(facts['target_value'])

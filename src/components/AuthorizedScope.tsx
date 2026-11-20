@@ -16,6 +16,7 @@ export default function AuthorizedScope({ overview, csrfToken, onExpired }: {
   const [error, setError] = useState('')
   const [fieldError, setFieldError] = useState('')
   const [value, setValue] = useState('')
+  const [ports, setPorts] = useState('')
   const [editing, setEditing] = useState<ScopeEntry>()
   const [removing, setRemoving] = useState<ScopeEntry>()
   const [feedback, setFeedback] = useState<{ title: string; description: string }>()
@@ -50,6 +51,7 @@ export default function AuthorizedScope({ overview, csrfToken, onExpired }: {
 
   function reset() {
     setValue('')
+    setPorts('')
     setFieldError('')
     setEditing(undefined)
     dismissRemoval()
@@ -73,6 +75,7 @@ export default function AuthorizedScope({ overview, csrfToken, onExpired }: {
     try {
       const result = await requestScope(assessmentId, controller.signal, {
         method, id, csrf: csrfToken, revision: list.revision, value: value.trim(),
+        tcp_ports: ports.trim() ? ports.split(',').map(p => Number(p.trim())) : [],
       })
       if (controller.signal.aborted) return
       setList(result)
@@ -88,6 +91,10 @@ export default function AuthorizedScope({ overview, csrfToken, onExpired }: {
         if (failure.status === 401) return expired.current()
         if (failure.code === 'duplicate_entry') {
           setFieldError('This scope entry already exists. Enter a different value.')
+          return
+        }
+        if (failure.code === 'invalid_tcp_ports') {
+          setFieldError('Authorize 1–16 unique TCP ports on an exact IPv4 scope entry, or leave ports empty for host discovery only.')
           return
         }
         if (failure.status === 422 && method !== 'DELETE') {
@@ -121,6 +128,12 @@ export default function AuthorizedScope({ overview, csrfToken, onExpired }: {
       input.current?.focus()
       return
     }
+    if (ports.trim() && (!/^[0-9]+(?:\s*,\s*[0-9]+)*$/.test(ports.trim()) ||
+      ports.split(',').length > 16 || ports.split(',').some(p => Number(p) < 1 || Number(p) > 65535) ||
+      new Set(ports.split(',').map(Number)).size !== ports.split(',').length)) {
+      setFieldError('Enter up to 16 unique TCP ports, separated by commas (1–65535).')
+      return
+    }
     void save(editing ? 'PATCH' : 'POST', editing?.id)
   }
 
@@ -149,6 +162,10 @@ export default function AuthorizedScope({ overview, csrfToken, onExpired }: {
             {editing && <button type="button" className="scope-secondary" disabled={busy} onClick={reset}>Cancel</button>}
             <button className="analyst-create" disabled={busy}>{editing ? 'Save Changes' : 'Add to Scope'}</button>
           </div>
+          <label htmlFor="scope-tcp-ports">Authorized TCP ports (optional, exact IPv4 only)</label>
+          <input id="scope-tcp-ports" value={ports} disabled={busy} maxLength={95}
+            onChange={event => { setPorts(event.target.value); setFieldError('') }} />
+          <p>Leave empty for host discovery only. Listed ports authorize restricted Nmap service detection after explicit Start confirmation.</p>
           <small id="scope-entry-feedback" className={fieldError ? 'scope-field-error' : undefined} role={fieldError ? 'alert' : undefined}>
             {fieldError || 'UPTIP automatically detects the entry type and validates its format and duplicates.'}
           </small>
@@ -160,11 +177,12 @@ export default function AuthorizedScope({ overview, csrfToken, onExpired }: {
         <table>
           <thead><tr><th scope="col">Scope Entry</th><th scope="col">Detected Type</th><th scope="col">Actions</th></tr></thead>
           <tbody>{list.entries.length ? list.entries.map(entry => <tr key={entry.id}>
-            <td>{entry.value}</td><td>{entry.kind}</td><td><div className="scope-actions">
+            <td>{entry.value}{Boolean(entry.tcp_ports?.length) && <small> · TCP {entry.tcp_ports!.join(", ")}</small>}</td><td>{entry.kind}</td><td><div className="scope-actions">
               {list.can_edit && <>
                 <button className="analyst-link" disabled={busy} onClick={() => {
                   setEditing(entry)
                   setValue(entry.value)
+                  setPorts(entry.tcp_ports?.join(", ") ?? "")
                   setFeedback(undefined)
                   setFieldError('')
                   input.current?.focus()

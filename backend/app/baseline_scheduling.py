@@ -16,7 +16,10 @@ def queue_baselines(db, authorization):
         AssessmentTarget.assessment_id == authorization.assessment_id,
     )))
     requests = []
-    for activity in activities:
+    for activity in sorted(activities, key=lambda a: (a['profile_id'] == 'service-discovery', a['target_id'], a['profile_id'])):
+        if activity['profile_id'] == 'service-discovery':
+            requests.append(queue_scoped_service(db, authorization, activity, requests))
+            continue
         target_id = UUID(activity['target_id'])
         if authorization.snapshot.get('purpose') == 'schedule_only':
             from .scheduling_policy import validate_preparation
@@ -60,3 +63,58 @@ def queued_requests(db, authorization_id):
     return db.scalars(select(BaselineExecutionRequest)
                       .where(BaselineExecutionRequest.authorization_id == authorization_id)
                       .order_by(BaselineExecutionRequest.target_id, BaselineExecutionRequest.profile_id)).all()
+
+
+def queue_scoped_service(db, authorization, activity, requests):
+    """Reuse existing consent/dispatch pipeline within the atomic Start transaction."""
+    from datetime import timedelta, timezone
+    from .models import ServiceDiscoveryConsent, ExecutionEvent
+    from .baseline_catalog import fingerprint
+    from .service_start_preparation import validate
+    from .scope_ports import authorized_ports
+    from .service_discovery import preparation
+    prep = activity.get('scheduling_preparation')
+    if (not validate(prep) or activity.get('status') != 'resolved'
+            or activity.get('tool') != 'Nmap' or activity.get('activity') != 'Service Discovery'
+            or activity.get('version') != 1 or activity.get('profile_digest') != prep['profile_digest']
+            or prep['assessment_id'] != str(authorization.assessment_id)
+            or prep['target_id'] != activity['target_id']
+            or prep['evaluation_id'] != activity['evaluation_id']
+            or prep['evaluation_fingerprint'] != activity['evaluation_fingerprint']):
+        raise ValueError('Invalid scoped service preparation')
+    host = next((r for r in requests if str(r.target_id) == activity['target_id']
+                 and r.profile_id == 'network-discovery'), None)
+    if host is None or host.authorized_activity['scheduling_preparation'] != prep['host_preparation']:
+        raise ValueError('Authorized host preparation required')
+    ports = authorized_ports(db, authorization.assessment_id, prep['target_value'])
+    if ports != prep['authorized_tcp_ports']:
+        raise ValueError('Authorized ports changed')
+    db.flush()
+    current = preparation(db, host, ports)
+    if current['plan'] != prep['plan']:
+        raise ValueError('Reviewed service plan changed')
+    now = authorization.confirmed_at.astimezone(timezone.utc)
+    expiry = now + timedelta(hours=1)
+    snapshot = {'schema_version': 1, 'actor_id': str(authorization.actor_id), 'confirmed': True,
+                'expires_at': expiry.isoformat(), 'preparation': current,
+                'source': 'assessment_start', 'reviewed_preparation': prep}
+    digest = fingerprint(snapshot)
+    row = BaselineExecutionRequest(id=uuid4(), assessment_id=authorization.assessment_id,
+        authorization_id=authorization.id, target_id=host.target_id,
+        profile_id='service-discovery', profile_version=1, tool='Nmap', activity='Service Discovery',
+        status='Queued', authorized_activity={'target_value': prep['target_value'],
+            'service_consent_digest': digest, 'scheduling_preparation': {
+                'plan': current['plan'], 'parameter_digest': current['plan']['parameter_digest']}})
+    db.add(row)
+    db.flush()
+    # One Start may cover several targets; use each immutable request identity
+    # for consent uniqueness rather than reusing the Start idempotency key.
+    db.add(ServiceDiscoveryConsent(request_id=row.id, assessment_id=authorization.assessment_id,
+        target_id=host.target_id, actor_id=authorization.actor_id, idempotency_key=row.id,
+        snapshot=snapshot, digest=digest, created_at=now, expires_at=expiry))
+    db.add(ExecutionEvent(request_id=row.id, assessment_id=row.assessment_id, target_id=row.target_id,
+        actor_id=authorization.actor_id, operation_id=row.id, event_type='service_discovery_confirmed',
+        reason_code='start_explicit_scoped_ports', details={'consent_digest': digest,
+        'policy_digest': current['policy']['digest']}, occurred_at=now))
+    db.flush()
+    return row

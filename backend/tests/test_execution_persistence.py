@@ -259,23 +259,28 @@ def test_constraints_indexes_and_existing_authorization_immutability(db,queued):
             with db.begin_nested():db.execute(text(statement))
 
 
-@pytest.mark.parametrize('scheduling_concurrency', ['migration_0017'], indirect=True)
-def test_0018_preserves_queued_requests_metadata_and_refuses_history_downgrade(scheduling_concurrency):
+@pytest.mark.parametrize('scheduling_concurrency', ['empty'], indirect=True)
+def test_0018_preserves_queued_requests_metadata_and_refuses_history_downgrade(scheduling_concurrency, monkeypatch):
     from pathlib import Path
     from alembic import command
     from alembic.config import Config
     from alembic.autogenerate import compare_metadata
     from alembic.migration import MigrationContext
     from app.database import Base
-    app,factory,(path,headers,_),review,cookies=scheduling_concurrency
+    app,factory,_,_,_=scheduling_concurrency
     from fastapi.testclient import TestClient
-    with TestClient(app,base_url='https://testserver',cookies=cookies) as c:
+    # Seed a historical-compatible host-only queue using the current app and
+    # schema, then downgrade safely to the revision whose upgrade is tested.
+    with factory() as db, TestClient(app,base_url='https://testserver') as c:
         c.headers['Origin']='https://testserver'
+        path,headers,_=prepared.__wrapped__(c,db,monkeypatch)
+        review=get_review(c,path)['start_review']
         receipt=confirm(c,path,headers,review)
         assert receipt.status_code==201
     engine=factory.kw['bind']
     config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
     config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
+    command.downgrade(config,'0017')
     with factory() as db:
         q=db.scalar(select(BaselineExecutionRequest))
         original=(q.id,q.status,q.authorized_activity,q.authorization_id)
@@ -290,7 +295,10 @@ def test_0018_preserves_queued_requests_metadata_and_refuses_history_downgrade(s
                         'testing_recommendation_decisions', 'testing_completion_events'}
         for table in Base.metadata.sorted_tables:
             if table.name not in later_tables:
-                table.to_metadata(historical)
+                copied = table.to_metadata(historical)
+                if table.name == 'scope_entries':
+                    copied._columns.remove(copied.c.tcp_ports)
+                    copied.constraints = {c for c in copied.constraints if c.name != 'ck_scope_tcp_ports'}
         assert compare_metadata(MigrationContext.configure(conn),historical)==[]
         assert conn.scalar(text('SELECT version_num FROM alembic_version'))=='0018'
     # Empty persistence downgrade is safe even with a pre-existing queue.

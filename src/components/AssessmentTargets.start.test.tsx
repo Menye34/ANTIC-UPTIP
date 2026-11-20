@@ -300,3 +300,19 @@ it('prevents duplicate confirmations while Start is pending and removes the conf
   await act(async () => { complete(response(receipt, 201)) })
   expectNoDraftActions()
 })
+
+it('shows the exact authorized service target and ports in the existing Start confirmation', async () => {
+  const service = { target_id: 'target', profile_id: 'service-discovery', tool: 'Nmap', activity: 'Service Discovery',
+    scheduling_preparation: { target_value: '192.0.2.1', authorized_tcp_ports: [80, 443] } }
+  const review = { ...startReview, eligible_activities: [eligible, service] }
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/readiness')
+    ? response(readinessResponse(review)) : response(targetList()))
+  vi.stubGlobal('fetch', fetcher)
+  render(<AssessmentTargets overview={'/analyst/assessments/' + id} csrfToken="csrf" onExpired={vi.fn()} />)
+  const start = await screen.findByRole('button', { name: 'Start Assessment' })
+  await waitFor(() => expect(start).toBeEnabled())
+  fireEvent.click(start)
+  expect(await screen.findByText(/192\.0\.2\.1, TCP 80, 443/)).toBeVisible()
+  expect(screen.getByText('Service Discovery', { exact: false, selector: 'li' })).toBeVisible()
+  expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/start'))).toBe(false)
+})

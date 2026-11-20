@@ -220,7 +220,10 @@ def confirm_start(assessment_id: UUID, body: StartConfirmation, request: Request
     response.headers['Cache-Control'] = 'no-store'
     # Authentication writers lock the user first. Hold the user and session
     # stable through confirmation, including when a request waited on a lock.
-    actor = db.scalar(select(User).where(User.id == user.id).with_for_update(read=True)
+    # Consent triggers require a creator write lock. Serialize Starts before
+    # locking the assessment; NO KEY UPDATE remains compatible with scope-event
+    # foreign-key references and avoids concurrent SHARE-to-UPDATE upgrades.
+    actor = db.scalar(select(User).where(User.id == user.id).with_for_update(key_share=True)
                       .execution_options(populate_existing=True))
     session = db.scalar(select(AuthSession).where(AuthSession.token_hash == digest(session_token))
                         .with_for_update(read=True).execution_options(populate_existing=True))
@@ -293,8 +296,9 @@ def confirm_start(assessment_id: UUID, body: StartConfirmation, request: Request
         db.flush()
         db.add(AssessmentStartEvent(authorization_id=record.id, occurred_at=now,
                                     from_status='Draft', to_status='Testing'))
-        requests = queue_baselines(db, record)
         assessment.status = 'Testing'
+        db.flush()
+        requests = queue_baselines(db, record)
         receipt = start_receipt(record, requests)
         db.commit()
     except SQLAlchemyError:

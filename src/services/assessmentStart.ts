@@ -3,6 +3,7 @@ export type StartMode = 'full' | 'partial'
 export interface StartActivity {
   target_id: string
   profile_id: string
+  scheduling_preparation?: { authorized_tcp_ports?: number[]; target_value?: string }
   activity?: string
   tool?: string
   exclusion_code?: string

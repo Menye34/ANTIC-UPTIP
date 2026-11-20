@@ -14,6 +14,10 @@ class DispatchDenied(ValueError):
     pass
 
 
+class DispatchDeferred(DispatchDenied):
+    """Verified scheduling dependency is still pending; never dispatch yet."""
+
+
 def verify(db, request, *, attempt=None, worker_id=None, claim_id=None):
     """Caller coordinates actor, assessment, global-source and request locks.
 

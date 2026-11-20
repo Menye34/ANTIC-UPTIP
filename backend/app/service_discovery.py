@@ -97,6 +97,24 @@ def verify_service(db, request, *, attempt=None, worker_id=None, claim_id=None):
     from .models import Assessment
     assessment = db.get(Assessment, request.assessment_id)
     require(assessment is not None and assessment.creator_id == consent.actor_id, 'service_actor_invalid')
+    if saved.get('source') == 'assessment_start':
+        from .scope_ports import authorized_ports
+        from .service_start_preparation import validate
+        from .models import AssessmentStartAuthorization
+        reviewed = saved.get('reviewed_preparation')
+        auth = db.get(AssessmentStartAuthorization, request.authorization_id)
+        matches = [a for a in auth.snapshot.get('eligible_activities', [])
+                   if a.get('target_id') == str(request.target_id)
+                   and a.get('profile_id') == 'service-discovery'] if auth else []
+        require(validate(reviewed) and len(matches) == 1
+                and matches[0].get('scheduling_preparation') == reviewed
+                and reviewed['plan'] == prep['plan']
+                and authorized_ports(db, request.assessment_id, prep['plan']['target']) == prep['plan']['ports'],
+                'start_service_scope_binding_invalid')
+        if host.status in ('Queued', 'Running'):
+            from .dispatch_verification import DispatchDeferred
+            raise DispatchDeferred('host_discovery_dependency_pending')
+        require(host.status == 'Completed', 'host_discovery_dependency_unsatisfied')
     current = preparation(db, host, prep['plan']['ports'])
     require(current == prep and validate_plan(prep['plan']), 'service_preparation_stale')
     expected = {'target_value': prep['plan']['target'], 'service_consent_digest': consent.digest,

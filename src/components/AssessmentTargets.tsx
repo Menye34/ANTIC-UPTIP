@@ -520,6 +520,7 @@ export default function AssessmentTargets({ overview, csrfToken, onExpired, navi
               <li key={activity.target_id + ':' + activity.profile_id}>
                 {activity.tool || 'Security tool'} —{' '}
                 {activity.activity || activity.profile_id}
+                {activity.scheduling_preparation?.authorized_tcp_ports && <span> — {activity.scheduling_preparation.target_value}, TCP {activity.scheduling_preparation.authorized_tcp_ports.join(', ')}</span>}
               </li>
             ))}
           </ul>
