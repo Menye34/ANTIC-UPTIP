@@ -342,7 +342,8 @@ it('opens Testing Completion inside the existing Testing tab and blocks incomple
 })
 
 
-it('shows ready confirmation and persisted completion without faking a Findings route', async () => {
+it('shows receipt-backed completion and navigates to assessment Findings', async () => {
+  const onFindings = vi.fn()
   const counts = { Queued: 0, Running: 0, Completed: 1, Failed: 0, Stopped: 0, Blocked: 0, Cancelled: 0 }
   const summary = {
     total: 1, counts, active_attempts: 0, active_execution_requests: 0, recovery_required_requests: 0,
@@ -371,7 +372,7 @@ it('shows ready confirmation and persisted completion without faking a Findings 
     }
     return reply(testingData(['Completed']))
   }))
-  render(<TestingPage assessmentId={assessmentId} onExpired={expired} csrfToken="synthetic-csrf" />)
+  render(<TestingPage assessmentId={assessmentId} onExpired={expired} csrfToken="synthetic-csrf" onFindings={onFindings} />)
   await screen.findByRole('table', { name: 'Test Activity' })
   fireEvent.click(screen.getByRole('tab', { name: 'Testing Completion' }))
   expect(await screen.findByRole('heading', { name: 'Ready to complete' })).toBeVisible()
@@ -381,6 +382,8 @@ it('shows ready confirmation and persisted completion without faking a Findings 
   fireEvent.click(within(dialog).getByRole('button', { name: 'Complete Testing' }))
   expect(await screen.findByRole('heading', { name: 'Testing Completed' })).toBeVisible()
   expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to Findings' }))
+  expect(onFindings).toHaveBeenCalledTimes(1)
 })
 
 it.each([null, 'Reviewed', 'Deferred'] as const)('renders persisted decision %s in cards and dialog without a write', async decision => {
