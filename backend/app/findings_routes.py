@@ -21,6 +21,16 @@ class FindingSummary(BaseModel):
     source: str
 
 
+class FindingDetail(FindingSummary):
+    source_test: str
+    description: str
+    impact: str
+    security_control: str
+    observed_condition: str
+    detected_issue: str
+    remediation: str
+
+
 class FindingsOverview(BaseModel):
     assessment_id: UUID
     lifecycle_status: str
@@ -46,3 +56,18 @@ def findings_overview(assessment_id: UUID, user: User = Depends(analyst),
         counts={severity: sum(f.severity == severity for f in findings)
                 for severity in ('Critical', 'High', 'Medium', 'Low')},
         findings=[FindingSummary.model_validate(f) for f in findings])
+
+
+@router.get('/{finding_id}', response_model=FindingDetail)
+def finding_detail(assessment_id: UUID, finding_id: UUID,
+                   user: User = Depends(analyst), db: Session = Depends(get_db)):
+    assessment = db.scalar(select(Assessment.id).where(
+        Assessment.id == assessment_id, accessible(user)))
+    if assessment is None:
+        raise HTTPException(404)
+    finding = db.scalar(select(ConsolidatedFinding).where(
+        ConsolidatedFinding.id == finding_id,
+        ConsolidatedFinding.assessment_id == assessment_id))
+    if finding is None:
+        raise HTTPException(404)
+    return FindingDetail.model_validate(finding)
