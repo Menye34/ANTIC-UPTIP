@@ -551,4 +551,14 @@ describe('Finding Review navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Go to Testing' }))
     expect(navigate).toHaveBeenCalledWith(draftPath + '/testing')
   })
+  it('keeps the assessment ID when opening a nested finding detail URL', async () => {
+    const fetcher = vi.fn(async () => response({ ...assessment, status: 'Finding Review' }))
+    vi.stubGlobal('fetch', fetcher)
+    const { navigate } = renderPage(draftPath + '/findings/synthetic-finding')
+    expect(await screen.findByRole('heading', { name: 'Finding unavailable' })).toBeVisible()
+    expect(fetcher).toHaveBeenCalledWith(api + '/' + assessment.id, expect.anything())
+    fireEvent.click(screen.getByRole('button', { name: /Back to Findings/ }))
+    expect(navigate).toHaveBeenCalledWith(draftPath + '/findings')
+  })
+
 })
