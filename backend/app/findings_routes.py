@@ -2,7 +2,7 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import select, case
 from sqlalchemy.orm import Session
 from .assessment_routes import accessible, analyst
 from .database import get_db
@@ -37,7 +37,10 @@ def findings_overview(assessment_id: UUID, user: User = Depends(analyst),
         raise HTTPException(404)
     findings = db.scalars(select(ConsolidatedFinding)
         .where(ConsolidatedFinding.assessment_id == assessment_id)
-        .order_by(ConsolidatedFinding.created_at, ConsolidatedFinding.id)).all()
+        .order_by(case((ConsolidatedFinding.severity == 'Critical', 0),
+                       (ConsolidatedFinding.severity == 'High', 1),
+                       (ConsolidatedFinding.severity == 'Medium', 2),
+                       else_=3), ConsolidatedFinding.created_at, ConsolidatedFinding.id)).all()
     return FindingsOverview(assessment_id=assessment_id, lifecycle_status=assessment.status,
         total=len(findings),
         counts={severity: sum(f.severity == severity for f in findings)
