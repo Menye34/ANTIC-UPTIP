@@ -9,10 +9,11 @@ import type { CompletionReview } from '../services/testingCompletion'
 const reply = (value: unknown, status = 200) => ({ ok: status < 400, status, json: async () => value })
 const expired = vi.fn()
 const decisionsChanged = vi.fn()
+const navigateFindings = vi.fn()
 const showModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
 const close = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
 beforeEach(() => {
-  expired.mockReset(); decisionsChanged.mockReset()
+  expired.mockReset(); decisionsChanged.mockReset(); navigateFindings.mockReset()
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value(this: HTMLDialogElement) { this.open = true } })
   Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value(this: HTMLDialogElement) { this.open = false } })
 })
@@ -30,7 +31,7 @@ function Harness({ csrf = 'synthetic-csrf', id = assessmentId }: { csrf?: string
   return <>
     <button onClick={() => setShow(n => !n)}>Toggle completion</button>
     {show && <TestingCompletion assessmentId={id} csrfToken={csrf} operation={operation} onOperationChange={setOperation}
-      onExpired={expired} onDecisionsChanged={decisionsChanged} onContinue={() => setShow(false)} onRecommendations={() => setShow(false)} />}
+      onExpired={expired} onDecisionsChanged={decisionsChanged} onContinue={() => setShow(false)} onFindings={navigateFindings} onRecommendations={() => setShow(false)} />}
   </>
 }
 function setup(value = completionReview(), csrf?: string) {
@@ -160,7 +161,9 @@ it('captures a private snapshot, submits its digest once and immediately display
   await act(async () => { resolvePost(reply(completedCompletionReview())) })
   expect(await screen.findByRole('heading', { name: 'Testing Completed' })).toBeVisible()
   expect(screen.queryByRole('button', { name: 'Complete Testing' })).not.toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Continue to Findings' })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Continue to Findings' }))
+  expect(navigateFindings).toHaveBeenCalledTimes(1)
   expect(fetcher).toHaveBeenCalledTimes(2) // initial GET and POST, no compulsory post-success GET
 })
 
