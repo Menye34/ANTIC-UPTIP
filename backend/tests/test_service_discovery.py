@@ -354,3 +354,45 @@ def test_outside_scope_target_never_receives_service_consent(client,db,prepared)
         json={'target_id':outside_id,'ports':[80],'confirmed':True})
     assert result.status_code==409
     assert db.scalar(select(func.count()).select_from(ServiceDiscoveryConsent))==0
+
+
+def test_creator_capability_and_receipt_lookup_are_read_only(client,db,service_setup):
+    path,headers,user,host=service_setup
+    assert client.get(path+'/testing').json()['can_schedule_service_discovery'] is True
+    key=str(uuid4())
+    lookup=path+'/testing/service-discovery/receipts/'+key
+    missing=client.get(lookup)
+    assert missing.status_code==200 and missing.json()=={'assessment_id':str(host.assessment_id),'receipt':None}
+    response=schedule(client,service_setup,key=key)
+    assert response.status_code==201
+    from app.models import ExecutionEvent
+    before=db.scalar(select(func.count()).select_from(ExecutionEvent))
+    for _ in range(2):
+        read=client.get(lookup)
+        assert read.status_code==200 and read.headers['Cache-Control']=='no-store'
+        assert read.json()['receipt']==response.json()
+        assert read.json()['receipt']['ports']==[80,443]
+    assert db.scalar(select(func.count()).select_from(ExecutionEvent))==before
+    assert db.scalar(select(func.count()).select_from(ServiceDiscoveryConsent))==1
+    # A receipt establishes historical scheduling, not fresh dispatch authority.
+    row=db.get(BaselineExecutionRequest,UUID(response.json()['execution_id']))
+    assert client.post(path+f'/testing/service-discovery/{row.id}/revoke',headers=headers).status_code==200
+    assert client.get(lookup).json()['receipt']==response.json()
+
+
+def test_assigned_and_unrelated_analysts_cannot_read_creator_receipts(client,db,service_setup):
+    from test_assessments import add_analyst,sign_in
+    from app.models import AssessmentAssignment
+    from fastapi.testclient import TestClient
+    path,headers,user,host=service_setup
+    key=str(uuid4());assert schedule(client,service_setup,key=key).status_code==201
+    lookup=path+'/testing/service-discovery/receipts/'+key
+    for assigned in (True,False):
+        other=add_analyst(db,'receipt-other-'+uuid4().hex)
+        if assigned:db.add(AssessmentAssignment(assessment_id=host.assessment_id,analyst_id=other.id))
+        db.commit();sign_in(client,other.username)
+        assert client.get(path+'/testing').status_code==(200 if assigned else 404)
+        if assigned:assert client.get(path+'/testing').json()['can_schedule_service_discovery'] is False
+        assert client.get(lookup).status_code==404
+    with TestClient(client.app,base_url='https://testserver') as anonymous:
+        assert anonymous.get(lookup).status_code==401

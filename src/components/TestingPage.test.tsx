@@ -700,3 +700,30 @@ it('displays evidence-backed service observations without enabling pending tools
   expect(await screen.findByRole('dialog')).toBeVisible()
   expect(within(screen.getByRole('dialog')).getByText('192.0.2.1:443 · TCP open · HTTPS · 1.2')).toBeVisible()
 })
+
+it('schedules service discovery through the Testing UI and refreshes persisted execution status', async () => {
+  let scheduled = false
+  const initial = { ...testingData(['Completed']), can_schedule_service_discovery: true }
+  const updated = { ...testingData(['Completed','Running']), can_schedule_service_discovery: true }
+  updated.executions[1] = { ...updated.executions[1], id: 'service-execution', target_id: initial.executions[0].target_id,
+    target: initial.executions[0].target, test_name: 'Service Discovery', profile_id: 'service-discovery', profile_version: 1 }
+  const receipt = { execution_id: 'service-execution', assessment_id: assessmentId, target_id: initial.executions[0].target_id,
+    ports: [80,443], consent_digest: 'a'.repeat(64), expires_at: '2026-11-20T10:00:00Z', status: 'Queued', execution_authorized: false }
+  const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+    if (options?.method === 'POST') { scheduled = true; return reply(receipt) }
+    if (url.endsWith('/testing')) return reply(scheduled ? updated : initial)
+    throw new Error('Unexpected request')
+  })
+  vi.stubGlobal('fetch', fetcher)
+  render(<TestingPage assessmentId={assessmentId} onExpired={expired} csrfToken="csrf" />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Schedule Service Discovery' }))
+  fireEvent.change(screen.getByLabelText('Authorized target'), { target: { value: initial.executions[0].target_id } })
+  fireEvent.change(screen.getByLabelText('Authorized TCP ports'), { target: { value: '80,443' } })
+  fireEvent.click(screen.getByRole('checkbox'))
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm and Queue' }))
+  expect(await screen.findByText(/Service-discovery scheduling was confirmed/)).toBeVisible()
+  expect(await screen.findByText('Service Discovery', { selector: 'th' })).toBeVisible()
+  expect(within(screen.getByRole('table', { name: 'Test Activity' })).getByText('Running')).toBeVisible()
+  expect(fetcher.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1)
+  expect(screen.getByRole('button', { name: 'Run Manual Test' })).toBeDisabled()
+})

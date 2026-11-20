@@ -74,6 +74,9 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
     snapshot = authorization.snapshot if authorization else {}
     return {
         'assessment_id': assessment_id, 'lifecycle_status': assessment.status,
+        # Permission to request preparation, not proof of dispatch eligibility.
+        'can_schedule_service_discovery': bool(assessment.status == 'Testing'
+            and assessment.creator_id == user.id and authorization is not None),
         'counts': {'total': len(requests), 'in_progress': counts['Running'],
                    'completed': counts['Completed'], 'failed': counts['Failed'],
                    'queued': counts['Queued'], 'stopped': counts['Stopped'],

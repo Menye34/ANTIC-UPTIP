@@ -1,3 +1,4 @@
+import ServiceDiscoveryScheduling from './ServiceDiscoveryScheduling'
 import TestingCompletion from './TestingCompletion'
 import { decideRecommendation } from '../services/testingCompletion'
 import type { CompletionOperation } from './TestingCompletion'
@@ -397,6 +398,8 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
       {data && <p>Displaying the last retrieved data; current status is unverified.</p>}
       <button className="analyst-link" type="button" onClick={() => setRetry(n => n + 1)}>Retry</button></section>}
     {!data && !error && <p role="status">Loading Testing…</p>}
+    {data && <ServiceDiscoveryScheduling data={data} visible={activeTab === 'activity'} available={!error}
+      csrfToken={csrfToken} onExpired={onExpired} onChanged={() => setRetry(n => n + 1)} />}
     {data && <div role="tabpanel" id={activeTab === 'activity' ? 'test-activity-panel' : activeTab === 'recommendations' ? 'recommendations-panel' : 'testing-completion-panel'} aria-labelledby={activeTab === 'activity' ? 'test-activity-tab' : activeTab === 'recommendations' ? 'recommendations-tab' : 'testing-completion-tab'} className="testing-panel">
       {activeTab === 'completion' ? <TestingCompletion assessmentId={assessmentId} csrfToken={csrfToken} operation={completionOperation} onOperationChange={setCompletionOperation} onExpired={onExpired} onDecisionsChanged={invalidateRecommendations} onContinue={() => setActiveTab('activity')} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
         <div className="testing-metrics">{[

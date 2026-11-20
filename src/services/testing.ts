@@ -19,6 +19,7 @@ export interface Execution {
 export interface TestingData {
   assessment_id: string
   lifecycle_status: 'Draft' | 'Ready' | 'Testing' | 'Finding Review'
+  can_schedule_service_discovery?: boolean
   counts: { total: number; queued: number; in_progress: number; completed: number; failed: number; stopped: number; blocked: number; cancelled: number }
   executions: Execution[]
   authorization_scope: {
@@ -52,7 +53,8 @@ function validExecution(value: Execution) {
 export async function getTesting(assessmentId: string, signal: AbortSignal) {
   const result = await startRequest<TestingData>(assessmentId, '/testing', signal)
   const keys = ['queued', 'in_progress', 'completed', 'failed', 'stopped', 'blocked', 'cancelled'] as const
-  if (result.assessment_id !== assessmentId || !['Draft', 'Ready', 'Testing', 'Finding Review'].includes(result.lifecycle_status)
+  if ((result.can_schedule_service_discovery !== undefined && typeof result.can_schedule_service_discovery !== 'boolean')
+      || result.assessment_id !== assessmentId || !['Draft', 'Ready', 'Testing', 'Finding Review'].includes(result.lifecycle_status)
       || !result.counts || !Number.isInteger(result.counts.total) || result.counts.total < 0
       || keys.some(key => !Number.isInteger(result.counts[key]) || result.counts[key] < 0)
       || keys.reduce((sum, key) => sum + result.counts[key], 0) !== result.counts.total

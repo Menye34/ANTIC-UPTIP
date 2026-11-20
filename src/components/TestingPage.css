@@ -213,3 +213,13 @@
 .testing-completion-status[data-state="next"] { color: #475569; background: #f1f5f9; }
 .testing-completion-dialog ul { list-style: none; padding: 16px; border-radius: 6px; background: #f1f5f9; }
 .testing-recommendation-count { margin-left: 6px; border-radius: 12px; padding: 2px 6px; background: #eff6ff; }
+
+.testing-service-scheduling { padding: 20px 24px; margin: 20px 0; }
+.testing-service-scheduling h2 { font-size: 18px; margin: 0 0 8px; }
+.testing-service-scheduling p { font-size: 14px; margin: 8px 0 16px; }
+.testing-service-form { display: grid; gap: 16px; }
+.testing-service-form h2, .testing-service-form p { margin: 0; }
+.testing-service-form label { display: grid; gap: 8px; font-size: 14px; }
+.testing-service-form select, .testing-service-form input:not([type="checkbox"]) { width: 100%; min-height: 40px; border: 1px solid var(--dash-border); border-radius: 6px; padding: 8px 12px; background: white; color: var(--dash-text); font: inherit; }
+.testing-service-form .testing-service-consent { display: flex; align-items: start; gap: 10px; }
+.testing-service-actions { display: flex; justify-content: end; flex-wrap: wrap; gap: 12px; }

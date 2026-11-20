@@ -61,8 +61,12 @@ The body is an explicit authorization of exactly these TCP port boundaries;
 assessment IP scope alone does not grant port-scanning consent. Obtain actual
 permission for the selected ports before calling this action. No guessed ports
 or synthetic approval/evidence is generated. This opt-in API is separate from
-Start; the current frontend displays its executions and observations but does
-not add a new scheduling form or redesign Testing.
+Start. On the existing Testing page, Test Activity now includes **Nmap Service
+Discovery → Schedule Service Discovery**. The creator selects an existing target,
+enters the explicitly authorized ports and checks the consent statement before
+**Confirm and Queue**. No ports are preselected. Unsupported targets and targets
+with an existing service-discovery request are not offered. The existing page,
+completion workflow and recommendation execution restrictions are preserved.
 
 A valid original Start snapshot must include that exact target as eligible,
 with unchanged scope and target revisions. A current resolved host baseline,
@@ -77,7 +81,7 @@ reconciled. Historical Start snapshots are never rewritten or treated as service
 consent. Later changes invalidate the newly captured consent.
 
 201 returns an immutable scheduling receipt: execution_id, assessment_id,
-target_id, consent_digest, expires_at (UTC), original status Queued and
+target_id, ports, consent_digest, expires_at (UTC), original status Queued and
 execution_authorized=false. Exact idempotent replay returns 200 and the same
 receipt, **not** a claim of current execution state. Read Testing APIs for current
 state. Conflicting key/body or another service request for the same Start/target
@@ -211,3 +215,83 @@ collection warning for an imported ORM `TestingCompletionEvent`, pgserver's
 runtime-directory fallback, and npm's pre-existing http-proxy configuration
 warning. No warning was suppressed to make validation pass. No actual scanner,
 Kali database, production database or browser acceptance test was run.
+
+
+## Frontend scheduling connection
+
+The Testing overview adds `can_schedule_service_discovery`, an actor-specific
+permission to request preparation while Testing, not a readiness or dispatch
+authorization. The POST still validates every current fact under the existing
+locks. Assigned analysts retain read-only Testing access; the UI cannot grant
+creator permission. Missing capability fields on an older backend fail closed.
+
+The form submits the existing POST with the session's CSRF token, same-origin
+credentials and a fresh UUID Idempotency-Key after explicit consent. An immediate
+in-flight guard prevents rapid duplicate submissions. Edited target/ports clear
+consent. No arbitrary Nmap arguments or pending-tool execution controls are added.
+The recorded receipt confirms scheduling only: the existing Testing polling
+remains the source for Queued/Running/Completed/Failed status and observations.
+
+For lost, malformed or 5xx POST responses the UI retains uncertainty and the exact
+submitted key, target and ports. It never automatically repeats POST. The new
+creator-only, authenticated read-only endpoint
+`GET /api/v1/assessments/{id}/testing/service-discovery/receipts/{idempotency_key}`
+returns `{assessment_id, receipt}`. An absent receipt is not proof that an in-flight
+transaction failed. Matching validated receipt readback establishes historical
+scheduling; even an expired or revoked consent receipt does not grant dispatch.
+Uncertainty persists when changing Testing tabs or closing the dialog. Protected
+state is not put into browser storage. Request cancellation on unmount and abort
+checks prevent late responses from updating a different assessment.
+
+No migration follows 0024 for this connection. No scanner, worker, profile,
+consent duration, Start Assessment or completion safety rules were changed.
+
+### Kali frontend acceptance after importing this follow-up
+
+1. Keep the already applied 0024 and existing verified configuration; do not
+   rerun migrations or manually insert consent records.
+2. Load the updated backend and frontend. Before restarting any worker, account
+   for existing Queued/Running/RecoveryRequired work; a worker can execute queued
+   requests immediately. No live scan is implied or authorized by importing code.
+3. Sign in as the assessment creator and open the existing Testing page for an
+   explicitly authorized isolated test assessment. Select Test Activity.
+4. Click Schedule Service Discovery; select the authorized IPv4 target and enter
+   only TCP ports for which active testing is explicitly permitted. Confirm the
+   consent checkbox, review the summary and select Confirm and Queue. With an
+   enabled worker this may launch Nmap immediately; do not confirm against any
+   target without actual permission.
+5. Observe the receipt confirmation and the persisted Service Discovery row.
+   Queued does not mean Running or Completed. Use View Details for provenance,
+   processing and actual service observations. If confirmation is uncertain,
+   use Check scheduling status; do not resubmit manually through another client.
+6. After verified HTTP/HTTPS observations, open Recommendations. Expect the
+   evidence-backed Nikto recommendation with its pending integration restriction.
+   Non-HTTP-only or host-only results legitimately may have no recommendation.
+   ZAP still requires verified web-application evidence and is not executable.
+
+Automated UI tests use synthetic responses and never run Nmap. Actual Kali
+browser acceptance remains separate from local test results.
+
+Frontend-connection verification: **389 backend tests passed, 0 failed/skipped**
+on disposable PostgreSQL 16.2 / Python 3.12.14; **273 frontend tests passed**.
+The same backend selection listed above now includes creator-capability and
+receipt-readback authorization/read-only tests. New service and component tests
+cover explicit ports/consent, CSRF, duplicate clicks, stale permission, safe
+uncertainty/readback, tab visibility, cancellation and late-response rejection.
+TypeScript, ESLint, production build, compilation and diff checks passed.
+The previously documented non-failing environment/deprecation warnings remain.
+PostgreSQL 18.4 and actual-browser acceptance were not run in this workspace.
+
+Files in the frontend-connection follow-up:
+- backend/app/service_discovery_routes.py
+- backend/app/testing_routes.py
+- backend/tests/test_service_discovery.py
+- src/components/ServiceDiscoveryScheduling.tsx
+- src/components/ServiceDiscoveryScheduling.test.tsx
+- src/components/TestingPage.tsx
+- src/components/TestingPage.css
+- src/components/TestingPage.test.tsx
+- src/services/serviceDiscovery.ts
+- src/services/serviceDiscovery.test.ts
+- src/services/testing.ts
+- docs/nmap-service-discovery.md

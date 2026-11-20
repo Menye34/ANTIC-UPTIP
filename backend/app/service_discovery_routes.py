@@ -46,6 +46,7 @@ def guard(request, db, assessment_id, user):
 def receipt(row):
     return {'execution_id': row.request_id, 'assessment_id': row.assessment_id,
             'target_id': row.target_id, 'consent_digest': row.digest,
+            'ports': row.snapshot['preparation']['plan']['ports'],
             'expires_at': row.expires_at.astimezone(timezone.utc), 'status': 'Queued', 'execution_authorized': False}
 
 
@@ -139,3 +140,20 @@ def revoke(assessment_id: UUID, execution_id: UUID, request: Request,
     except Exception:
         db.rollback()
         raise
+
+
+@router.get('/service-discovery/receipts/{idempotency_key}')
+def lookup_receipt(assessment_id: UUID, idempotency_key: UUID,
+                   user: User = Depends(analyst), db: Session = Depends(get_db)):
+    """Readback after an uncertain POST, including after Testing has completed.
+
+    An absent row is NOT proof that an in-flight transaction has failed.
+    """
+    assessment = db.scalar(select(Assessment).where(
+        Assessment.id == assessment_id, Assessment.creator_id == user.id))
+    if assessment is None:
+        raise HTTPException(404)
+    row = db.scalar(select(ServiceDiscoveryConsent).where(
+        ServiceDiscoveryConsent.assessment_id == assessment_id,
+        ServiceDiscoveryConsent.idempotency_key == idempotency_key))
+    return {'assessment_id': assessment_id, 'receipt': receipt(row) if row else None}
