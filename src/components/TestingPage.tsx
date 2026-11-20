@@ -295,13 +295,13 @@ function observationLabel(item: { type: string; data: Record<string, unknown> })
     ? `${d.address}: ${d.status}` : item.type
 }
 
-type TestingPageProps = { assessmentId: string; onExpired: () => void; csrfToken?: string }
+type TestingPageProps = { assessmentId: string; onExpired: () => void; csrfToken?: string; onFindings?: () => void }
 
 export default function TestingPage(props: TestingPageProps) {
   return <TestingAssessment key={props.assessmentId} {...props} />
 }
 
-function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingPageProps) {
+function TestingAssessment({ assessmentId, onExpired, csrfToken = '', onFindings }: TestingPageProps) {
   const [data, setData] = useState<TestingData>()
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
@@ -401,7 +401,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
     {data && <ServiceDiscoveryScheduling data={data} visible={activeTab === 'activity'} available={!error}
       csrfToken={csrfToken} onExpired={onExpired} onChanged={() => setRetry(n => n + 1)} />}
     {data && <div role="tabpanel" id={activeTab === 'activity' ? 'test-activity-panel' : activeTab === 'recommendations' ? 'recommendations-panel' : 'testing-completion-panel'} aria-labelledby={activeTab === 'activity' ? 'test-activity-tab' : activeTab === 'recommendations' ? 'recommendations-tab' : 'testing-completion-tab'} className="testing-panel">
-      {activeTab === 'completion' ? <TestingCompletion assessmentId={assessmentId} csrfToken={csrfToken} operation={completionOperation} onOperationChange={setCompletionOperation} onExpired={onExpired} onDecisionsChanged={invalidateRecommendations} onContinue={() => setActiveTab('activity')} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
+      {activeTab === 'completion' ? <TestingCompletion assessmentId={assessmentId} csrfToken={csrfToken} operation={completionOperation} onOperationChange={setCompletionOperation} onExpired={onExpired} onDecisionsChanged={invalidateRecommendations} onContinue={() => setActiveTab('activity')} onFindings={() => onFindings?.()} onRecommendations={() => setActiveTab('recommendations')} /> : activeTab === 'recommendations' ? <>
         <div className="testing-metrics">{[
           ['Total Tests', data.counts.total], ['In Progress', data.counts.in_progress],
           ['Completed', data.counts.completed], ['Failed', data.counts.failed],
