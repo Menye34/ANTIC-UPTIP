@@ -223,13 +223,14 @@ export default function AssessmentPage(props: AssessmentPageProps) {
   const findings = /\/findings(?:\/[^/]+)?$/.test(props.path)
   const findingId = props.path.match(/\/findings\/([^/]+)$/)?.[1]
   const findingsOverviewPath = props.path.replace(/\/findings(?:\/[^/]+)?$/, '/findings')
+  const findingsAssessmentId = findingsOverviewPath.split('/').at(-2)!
   const scopeOverview = /\/(scope|targets)$/.test(props.path) ? props.path.replace(/\/(scope|targets)$/, '') : undefined
   return <AnalystShell testingPath={testing ? props.path : undefined} findingsPath={findings ? findingsOverviewPath : undefined} targetsActive={targets} scopeOverview={scopeOverview} sidebar={testing || findings || create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
     initials={props.username.slice(0, 2).toUpperCase()} signingOut={props.signingOut} onSignOut={props.onSignOut}>
     <main className={testing || findings ? 'analyst-content testing-content' : create ? 'analyst-content' : 'analyst-content assessment-overview'}>
       {props.logoutFailed && <p role="alert">Unable to sign out. Please try again.</p>}
       {testing ? <TestingPage key={props.path} currentAnalyst={{ id: props.userId, username: props.username }} assessmentId={props.path.split('/').at(-2)!} csrfToken={props.csrfToken} onExpired={props.onExpired} onFindings={() => props.navigate(props.path.replace(/\/testing$/, '/findings'))} />
-        : findings ? <FindingsPage assessmentId={props.path.split('/').at(-2)!} onExpired={props.onExpired} onTesting={() => props.navigate(findingsOverviewPath.replace(/\/findings$/, '/testing'))} findingId={findingId} onFinding={id => props.navigate(findingsOverviewPath + '/' + encodeURIComponent(id))} onBack={() => props.navigate(findingsOverviewPath)} />
+        : findings ? <FindingsPage assessmentId={findingsAssessmentId} onExpired={props.onExpired} onTesting={() => props.navigate(findingsOverviewPath.replace(/\/findings$/, '/testing'))} findingId={findingId} onFinding={id => props.navigate(findingsOverviewPath + '/' + encodeURIComponent(id))} onBack={() => props.navigate(findingsOverviewPath)} />
         : create ? <CreateForm {...props} /> : scopeOverview && targets ? <AssessmentTargets overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} navigate={props.navigate} />
         : scopeOverview ? <AuthorizedScope overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} /> : <Overview {...props} />}
     </main>
