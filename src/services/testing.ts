@@ -40,6 +40,7 @@ export interface TestingData {
 }
 export interface ExecutionDetails extends Execution {
   dispatch_status: string
+  dispatch_history?: { id: string; event: string; reason_code: string; occurred_at: string; attempt_id: string | null } | null
   attempts: Array<{ id: string; attempt_number: number; status: string; reason_code: string | null; started_at: string | null; finished_at: string | null; exit_code: number | null; recovery_reason: string | null }>
   evidence: Array<{ id: string; format: string; size_bytes: number; partial: boolean; collected_at: string; sha256: string }>
   processing: Array<{ id: string; status: string; processor: string; version: string; error_code: string | null; observation_count: number; partial: boolean }>
@@ -89,6 +90,12 @@ export async function getExecutionDetails(assessmentId: string, executionId: str
       || !Array.isArray(result.events)) throw new Error('Invalid execution details')
   const nullableText = (value: unknown) => value === null || typeof value === 'string'
   if (typeof result.dispatch_status !== 'string'
+    || (result.dispatch_history != null && (typeof result.dispatch_history.id !== 'string'
+      || !['dispatch_blocked', 'execution_claimed', 'scanner_started'].includes(result.dispatch_history.event)
+      || result.dispatch_history.event !== result.dispatch_status
+      || typeof result.dispatch_history.reason_code !== 'string'
+      || !Number.isFinite(Date.parse(result.dispatch_history.occurred_at))
+      || !nullableText(result.dispatch_history.attempt_id)))
     || result.attempts.some(a => !a || typeof a.id !== 'string' || !Number.isInteger(a.attempt_number)
       || a.attempt_number < 1 || typeof a.status !== 'string' || !nullableText(a.reason_code)
       || !nullableText(a.started_at) || !nullableText(a.finished_at) || !nullableText(a.recovery_reason))
@@ -103,6 +110,7 @@ export async function getExecutionDetails(assessmentId: string, executionId: str
       || !o.data || typeof o.data !== 'object' || Array.isArray(o.data)
       || typeof o.partial !== 'boolean' || typeof o.evidence_id !== 'string')
     || result.events.some(e => !e || typeof e.id !== 'string' || typeof e.event !== 'string'
+      || typeof e.reason_code !== 'string' || !nullableText(e.attempt_id)
       || !Number.isFinite(Date.parse(e.occurred_at)))) throw new Error('Invalid execution details')
   return result
 }

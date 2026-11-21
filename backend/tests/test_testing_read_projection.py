@@ -106,6 +106,9 @@ def test_overview_and_details_are_coherent_read_only(client,db,engine,completed)
     assert data['authorization_scope']['authorized_by']['confirmed_at']
     details=response.json()
     assert details['status']=='Completed' and details['attempts'][0]['status']=='Succeeded'
+    assert details['dispatch_status'] == 'scanner_started'
+    assert details['dispatch_history']['reason_code'] == 'dispatch_verified'
+    assert details['execution_authorized'] is False
     assert details['processing'][0]['status']=='Succeeded' and len(details['observations'])==2
     assert any(e['id']==str(evidence.id) for e in details['evidence'])
     # One data projection per endpoint in addition to session/user auth reads.

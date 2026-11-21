@@ -121,3 +121,32 @@ it('renders the Figma service table from recorded facts without inventing versio
   const table = screen.getByRole('table', { name: 'Discovered ports and services' })
   for (const label of ['Port', 'Service', 'Version', '443/tcp', 'HTTPS', 'Not identified']) expect(within(table).getByText(label)).toBeVisible()
 })
+
+it('shows a recorded dispatch block separately from execution state without offering retry execution', async () => {
+  const value = executionDetails()
+  value.status = 'Blocked'
+  value.dispatch_status = 'dispatch_blocked'
+  value.dispatch_history = { id: 'block', event: 'dispatch_blocked',
+    reason_code: 'service_scheduling_policy_version_unsupported', occurred_at: '2026-11-21T03:49:39Z', attempt_id: null }
+  value.events = [value.dispatch_history]
+  details.mockResolvedValue(value); await mount()
+  expect(screen.getByText('Blocked', { selector: '.testing-state' })).toBeVisible()
+  const history = screen.getByRole('region', { name: 'Recorded dispatch outcome' })
+  expect(within(history).getByText('Blocking reason: service_scheduling_policy_version_unsupported')).toBeVisible()
+  expect(history).toHaveTextContent('not permission for a future execution')
+  expect(screen.queryByRole('button', { name: /start|run|retry execution/i })).not.toBeInTheDocument()
+  expect(screen.getByText('Technical Details').closest('details')).not.toHaveAttribute('open')
+})
+
+it('preserves legacy generic blocking reasons and displays event reasons as safe text', async () => {
+  const value = executionDetails()
+  value.status = 'Blocked'; value.dispatch_status = 'dispatch_blocked'
+  value.dispatch_history = { id: 'legacy', event: 'dispatch_blocked', reason_code: 'start_service_scope_binding_invalid',
+    occurred_at: '2026-11-21T03:49:39Z', attempt_id: null }
+  value.events = [{ ...value.dispatch_history, id: 'hostile', reason_code: '<script>untrusted</script>' }]
+  details.mockResolvedValue(value); await mount()
+  expect(screen.getByText('Blocking reason: start_service_scope_binding_invalid')).toBeVisible()
+  const technical = screen.getByText('Technical Details').closest('details')!; technical.open = true
+  const event = screen.getByText(/<script>untrusted<\/script>/)
+  expect(event.querySelector('script')).toBeNull()
+})

@@ -138,11 +138,16 @@ def test_scope_ports_readback_audit_and_clear(client, db, prepared):
     entry = next(e for e in scope['entries'] if e['value'] == '192.0.2.1')
     assert entry['tcp_ports'] == [80, 443]
     assert db.scalar(select(ScopeEvent).order_by(ScopeEvent.revision.desc())).after['tcp_ports'] == [80, 443]
+    assert get_review(client, path)['start_review']['eligible_activities'][1]['scheduling_preparation']['authorized_tcp_ports'] == [80, 443]
     assert client.patch(path + '/scope/' + entry['id'], headers=headers,
         json={'revision': scope['revision'], 'value': entry['value'], 'tcp_ports': []}).status_code == 200
     review = get_review(client, path)['start_review']
     assert [a['profile_id'] for a in review['eligible_activities']] == ['network-discovery', 'service-discovery']
-    assert review['eligible_activities'][1]['scheduling_preparation']['authorized_tcp_ports'] == [80, 443]
+    # Clearing a legacy restriction restores the current, reviewed v3 fixed set;
+    # it does not retain an implicit v2-only port boundary.
+    service = review['eligible_activities'][1]['scheduling_preparation']
+    assert service['scheduling_policy']['version'] == 3
+    assert service['authorized_tcp_ports'] == [80, 443, 3000, 5000, 8000, 8080, 8443, 8888]
 
 
 def test_scope_port_history_refuses_downgrade(scheduling_concurrency, monkeypatch):

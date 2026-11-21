@@ -10,6 +10,7 @@ from .nmap_service_profile import CAPABILITY, authority, canonical_ports, plan
 
 POLICY_ID = 'uptip-scoped-service-scheduling'
 VERSION = 3
+SUPPORTED_VERSIONS = (1, 2, 3)
 # Immutable release-owned definitions; never edit historical profiles in place.
 V2_BASELINE_PORTS = (80, 443)
 BASELINE_PORTS = (80, 443, 3000, 5000, 8000, 8080, 8443, 8888)
@@ -17,7 +18,7 @@ BASELINE_PORTS = (80, 443, 3000, 5000, 8000, 8080, 8443, 8888)
 
 def policy(version=None):
     version = VERSION if version is None else version
-    if type(version) is not int or version not in (1, 2, 3):
+    if type(version) is not int or version not in SUPPORTED_VERSIONS:
         raise ValueError('Unsupported service scheduling policy')
     if V2_BASELINE_PORTS != (80, 443) or BASELINE_PORTS != (80, 443, 3000, 5000, 8000, 8080, 8443, 8888):
         raise ValueError('Fixed baseline port definition changed')

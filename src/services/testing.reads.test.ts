@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { getOriginalEvidence, getTesting } from './testing'
-import { assessmentId, testingData } from '../test-fixtures/testing'
+import { getExecutionDetails, getOriginalEvidence, getTesting } from './testing'
+import { assessmentId, executionDetails, testingData } from '../test-fixtures/testing'
 afterEach(() => vi.unstubAllGlobals())
 const source = { id: 'e', format: 'nmap-xml', sha256: 'a'.repeat(64), size_bytes: 4, partial: false, collected_at: '2026-11-20T10:00:00Z' }
 const value = { assessment_id: assessmentId, execution_id: 'x', evidence_id: 'e', format: 'nmap-xml',
@@ -24,3 +24,29 @@ it.each([{ open_ports: -1, services: 1, web_targets: null }, { open_ports: '1', 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ ...testingData(), discovery_totals })))
     await expect(getTesting(assessmentId, new AbortController().signal)).rejects.toThrow('Invalid Testing context')
   })
+
+it('validates persisted dispatch history without treating it as future execution authorization', async () => {
+  const value = { ...executionDetails(), status: 'Blocked', dispatch_status: 'dispatch_blocked',
+    dispatch_history: { id: 'event', event: 'dispatch_blocked', reason_code: 'start_service_scope_ports_changed',
+      occurred_at: '2026-11-21T03:49:39Z', attempt_id: null } }
+  const fetcher = vi.fn().mockResolvedValue(reply(value)); vi.stubGlobal('fetch', fetcher)
+  const result = await getExecutionDetails(assessmentId, value.id, new AbortController().signal)
+  expect(result.dispatch_history).toEqual(value.dispatch_history)
+  expect(result.execution_authorized).toBe(false)
+  expect(fetcher.mock.calls[0][1].method).toBeUndefined()
+})
+
+it.each([{ event: 'scanner_started' }, { reason_code: null }, { occurred_at: 'invalid' }, { attempt_id: 3 }])(
+  'rejects malformed or contradictory dispatch history: %j', async changes => {
+    const value = { ...executionDetails(), dispatch_status: 'dispatch_blocked', dispatch_history: {
+      id: 'event', event: 'dispatch_blocked', reason_code: 'scope_changed', occurred_at: '2026-11-21T03:49:39Z', attempt_id: null, ...changes } }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(value)))
+    await expect(getExecutionDetails(assessmentId, value.id, new AbortController().signal)).rejects.toThrow('Invalid execution details')
+  })
+
+it('rejects malformed timeline reasons before drawer rendering', async () => {
+  const value = { ...executionDetails(), events: [{ id: 'event', event: 'dispatch_blocked',
+    reason_code: { unexpected: 'object' }, occurred_at: '2026-11-21T03:49:39Z', attempt_id: null }] }
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(value)))
+  await expect(getExecutionDetails(assessmentId, value.id, new AbortController().signal)).rejects.toThrow('Invalid execution details')
+})

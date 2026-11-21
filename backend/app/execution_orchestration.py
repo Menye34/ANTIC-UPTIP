@@ -10,6 +10,7 @@ from .dispatch_verification import DispatchDeferred, DispatchDenied, verify
 from .execution_results import evidence, process
 from .nmap_adapter import AdapterUnavailable
 from .models import Assessment, BaselineExecutionRequest, ExecutionAttempt, ExecutionEvent
+from .worker_diagnostics import diagnostics
 
 
 def now():
@@ -20,7 +21,7 @@ def event(db, request, attempt, kind, reason, details=None):
     db.add(ExecutionEvent(request_id=request.id, assessment_id=request.assessment_id,
         target_id=request.target_id, attempt_id=attempt.id if attempt else None,
         operation_id=uuid4(), event_type=kind, reason_code=reason,
-        system_origin='execution-worker-v1', details=details or {}, occurred_at=now()))
+        system_origin='execution-worker-v1', details={**(details or {}), 'worker': diagnostics()}, occurred_at=now()))
     db.flush()
 
 

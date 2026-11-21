@@ -200,8 +200,9 @@ def execution_details(assessment_id: UUID, execution_id: UUID,
     if row is None:
         raise HTTPException(404)
     request, attempts, evidence, processing, observations, events = row
+    from .testing_read_summary import dispatch_history
     return {**execution_view(request), 'authorized_activity': request.authorized_activity,
-        'dispatch_status': 'requires_fresh_authorization',
+        **dispatch_history(events or []),
         'attempts': sorted(attempts or [], key=lambda a: a['attempt_number']),
         'evidence': sorted(evidence or [], key=lambda e: (e['collected_at'], e['id'])),
         'processing': processing or [],

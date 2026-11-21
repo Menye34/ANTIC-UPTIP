@@ -98,19 +98,25 @@ def verify_service(db, request, *, attempt=None, worker_id=None, claim_id=None):
     assessment = db.get(Assessment, request.assessment_id)
     require(assessment is not None and assessment.creator_id == consent.actor_id, 'service_actor_invalid')
     if saved.get('source') == 'assessment_start':
-        from .service_start_preparation import validate, ports_for
+        from .service_start_preparation import validate, ports_for, SUPPORTED_VERSIONS
         from .models import AssessmentStartAuthorization
         reviewed = saved.get('reviewed_preparation')
         auth = db.get(AssessmentStartAuthorization, request.authorization_id)
         matches = [a for a in auth.snapshot.get('eligible_activities', [])
                    if a.get('target_id') == str(request.target_id)
                    and a.get('profile_id') == 'service-discovery'] if auth else []
-        require(validate(reviewed) and len(matches) == 1
-                and matches[0].get('scheduling_preparation') == reviewed
-                and reviewed['plan'] == prep['plan']
-                and ports_for(db, request.assessment_id, prep['plan']['target'],
-                              reviewed['scheduling_policy']['version']) == prep['plan']['ports'],
-                'start_service_scope_binding_invalid')
+        require(isinstance(reviewed, dict) and isinstance(reviewed.get('scheduling_policy'), dict),
+                'start_service_reviewed_preparation_invalid')
+        version = reviewed['scheduling_policy'].get('version')
+        require(type(version) is int and version in SUPPORTED_VERSIONS,
+                'service_scheduling_policy_version_unsupported')
+        require(validate(reviewed), 'start_service_reviewed_preparation_invalid')
+        require(len(matches) == 1, 'start_service_activity_match_invalid')
+        require(matches[0].get('scheduling_preparation') == reviewed,
+                'start_service_authorization_binding_invalid')
+        require(reviewed['plan'] == prep['plan'], 'start_service_plan_binding_invalid')
+        require(ports_for(db, request.assessment_id, prep['plan']['target'], version) == prep['plan']['ports'],
+                'start_service_scope_ports_changed')
         if host.status in ('Queued', 'Running'):
             from .dispatch_verification import DispatchDeferred
             raise DispatchDeferred('host_discovery_dependency_pending')

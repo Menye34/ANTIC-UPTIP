@@ -1,7 +1,9 @@
 """Explicit operator-launched worker; never started by FastAPI or migrations."""
 import argparse
+import json
 import signal
 import socket
+import sys
 import time
 from uuid import uuid4
 
@@ -14,9 +16,15 @@ from .execution_orchestration import ExecutionRunner, recover_expired
 from .execution_results import EvidenceStore
 from .models import BaselineExecutionRequest
 from .nmap_adapter import AdapterConfig, NmapAdapter
+from .worker_diagnostics import diagnostics
 
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # This read-only command does not load database settings or invoke Nmap.
+    if argv == ['--diagnostics']:
+        print(json.dumps(diagnostics(), sort_keys=True), flush=True)
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--executable', required=True)
     parser.add_argument('--sha256', required=True)
@@ -27,9 +35,10 @@ def main():
     parser.add_argument('--safety-interval', type=float, default=5)
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--enable-dispatch', action='store_true', help='Explicit operator opt-in; never grants authorization')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not args.enable_dispatch:
         parser.error('Dispatch requires explicit operator opt-in and independent runtime authorization.')
+    print('uptip_worker_started ' + json.dumps(diagnostics(), sort_keys=True), flush=True)
     adapter = NmapAdapter(AdapterConfig(args.executable, args.sha256, args.version,
         args.timeout, args.output_limit, args.safety_interval))
     store = EvidenceStore(args.evidence_directory)

@@ -20,7 +20,7 @@ export function testingData(statuses: ExecutionStatus[] = []): TestingData {
       execution_id: 'synthetic-execution-' + i, occurred_at: '2026-11-16T10:00:00Z' })) }
 }
 export function executionDetails(): ExecutionDetails {
-  return { ...testingData(['Queued']).executions[0], dispatch_status: 'requires_fresh_authorization',
+  return { ...testingData(['Queued']).executions[0], dispatch_status: 'not_recorded', dispatch_history: null,
     attempts: [], evidence: [], processing: [], observations: [], events: [] }
 }
 

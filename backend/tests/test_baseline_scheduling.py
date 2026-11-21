@@ -72,7 +72,8 @@ def test_start_queues_exactly_authorized_work(client, db, start_case, monkeypatc
     assert executions[0]['status'] == 'Queued'
     assert executions[0]['target'] == '192.0.2.1'
     details = client.get(path + '/testing/executions/' + executions[0]['id']).json()
-    assert details['dispatch_status'] == 'requires_fresh_authorization'
+    assert details['dispatch_status'] == 'not_recorded'
+    assert details['dispatch_history'] is None
     assert details['authorized_activity']['safety_evidence']['parameter_digest']
     assert len(overview['authorization_scope']['excluded_targets']) == int(partial)
 

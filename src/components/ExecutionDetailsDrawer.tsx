@@ -128,6 +128,12 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
           <p>Tool: {data.tool}</p><p>Target: {data.target}</p></section>
         <p className="testing-detail-status" role="status">{!['Queued', 'Running'].includes(data.status) && detailsNeedRefresh(data) ? 'Execution details are incomplete or uncertain; completion cannot be verified from this snapshot.' : data.status === 'Completed' ? 'The test completed. Review the recorded ports, services and original evidence.'
           : data.status === 'Queued' ? 'This test is queued and has not started.' : `Execution status: ${data.status}. Results may be incomplete.`}</p>
+        {data.dispatch_history && <section className="testing-detail-section" aria-label="Recorded dispatch outcome">
+          <h3>Recorded Dispatch Outcome</h3>
+          <p>{data.dispatch_history.event.replace(/_/g, ' ')} · {time(data.dispatch_history.occurred_at)}</p>
+          <p>{data.dispatch_history.event === 'dispatch_blocked' ? 'Blocking reason' : 'Recorded reason'}: {data.dispatch_history.reason_code}</p>
+          <p>This is recorded history, not permission for a future execution.</p>
+        </section>}
         {data.status === 'Failed' && <section aria-label="Failure information"><h3>Failure Information</h3><p>{data.attempts.at(-1)?.reason_code ?? 'Not recorded'}</p></section>}
         <section className="testing-detail-section" aria-label="Test results"><h3>Test Results</h3>
           {services.length ? <><p>{services.length} recorded open TCP services{services.some(o => o.partial) && ' (includes partial results)'}.</p>
@@ -140,11 +146,11 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
         <OriginalOutput data={data} assessmentId={assessmentId} denied={denied} />
         <details className="testing-detail-section"><summary>Technical Details</summary>
           <dl className="testing-metadata"><div><dt>Execution ID</dt><dd>{data.id}</dd></div><div><dt>Profile</dt><dd>{data.profile_id} v{data.profile_version}</dd></div>
-            <div><dt>Dispatch status</dt><dd>{data.dispatch_status}</dd></div></dl>
+            <div><dt>Recorded dispatch status</dt><dd>{data.dispatch_status.replace(/_/g, ' ')}</dd></div></dl>
           <h3>Execution attempts</h3>{data.attempts.map(a => <p key={a.id}>Attempt {a.attempt_number}: {a.status} · {time(a.started_at)} · {time(a.finished_at)} {a.reason_code} {a.recovery_reason}</p>)}
           {!data.attempts.length && <p>No execution attempt recorded. Queued does not mean Running.</p>}
           <h3>Result processing</h3>{data.processing.map(p => <p key={p.id}>{p.status} · {p.observation_count} observations {p.partial && '· Partial'} {p.error_code}</p>)}
-          <h3>Execution timeline</h3>{data.events.map(e => <p key={e.id}>{e.event.replace(/_/g, ' ')} · {time(e.occurred_at)}</p>)}
+          <h3>Execution timeline</h3>{data.events.map(e => <p key={e.id}>{e.event.replace(/_/g, ' ')} · {time(e.occurred_at)} · {e.reason_code}</p>)}
         </details>
       </>}
     </div>

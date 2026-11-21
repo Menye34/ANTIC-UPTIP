@@ -1,6 +1,21 @@
 """Counts of verified observations, never inferred from reachability or port numbers."""
 import re
 from ipaddress import IPv4Address
+from datetime import datetime
+
+
+def dispatch_history(events):
+    """Last persisted dispatch milestone, not a fresh authorization decision.
+
+    Terminal execution state remains in the request's existing status field.
+    Events are projected in a single SQL snapshot and ordered deterministically.
+    """
+    milestones = [event for event in events if event['event'] in (
+        'dispatch_blocked', 'execution_claimed', 'scanner_started')]
+    latest = max(milestones, key=lambda event: (
+        datetime.fromisoformat(event['occurred_at']), event['id']), default=None)
+    return {'dispatch_status': latest['event'] if latest else 'not_recorded',
+            'dispatch_history': latest}
 
 
 def discovery_totals(observations, service_processed):
