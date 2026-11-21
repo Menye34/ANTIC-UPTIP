@@ -150,17 +150,16 @@ def migration_db(monkeypatch):
                             test_migration_url.render_as_string(hide_password=False))
         config = Config(str(Path(__file__).resolve().parents[1] / 'alembic.ini'))
         command.upgrade(config, '0016')
-        if direct_admin:
-            # Bootstrap only this marked test DB's pre-Start runtime grants.
-            # No owner membership, DDL, TRUNCATE or protected-history UPDATE.
-            with migration_engine.begin() as connection:
-                connection.execute(text('GRANT USAGE, SELECT ON SEQUENCE assessment_reference_sequence TO uptip_runtime'))
-                connection.execute(text('GRANT SELECT ON roles TO uptip_runtime'))
-                connection.execute(text('GRANT SELECT, UPDATE ON users TO uptip_runtime'))
-                connection.execute(text('GRANT SELECT, INSERT, UPDATE, DELETE ON auth_sessions, login_buckets, password_change_challenges TO uptip_runtime'))
-                connection.execute(text('GRANT SELECT, INSERT ON auth_events TO uptip_runtime'))
-                connection.execute(text('GRANT SELECT, INSERT, UPDATE ON assessments, assessment_assignments, scope_entries, assessment_targets, baseline_tool_states, baseline_assignments TO uptip_runtime'))
-                connection.execute(text('GRANT SELECT, INSERT ON assessment_creation_events, scope_events, baseline_evaluations TO uptip_runtime'))
+        # Bootstrap only this marked test DB's pre-Start runtime grants.
+        # No owner membership, DDL, TRUNCATE or protected-history UPDATE.
+        with migration_engine.begin() as connection:
+            connection.execute(text('GRANT USAGE, SELECT ON SEQUENCE assessment_reference_sequence TO uptip_runtime'))
+            connection.execute(text('GRANT SELECT ON roles TO uptip_runtime'))
+            connection.execute(text('GRANT SELECT, UPDATE ON users TO uptip_runtime'))
+            connection.execute(text('GRANT SELECT, INSERT, UPDATE, DELETE ON auth_sessions, login_buckets, password_change_challenges TO uptip_runtime'))
+            connection.execute(text('GRANT SELECT, INSERT ON auth_events TO uptip_runtime'))
+            connection.execute(text('GRANT SELECT, INSERT, UPDATE ON assessments, assessment_assignments, scope_entries, assessment_targets, baseline_tool_states, baseline_assignments TO uptip_runtime'))
+            connection.execute(text('GRANT SELECT, INSERT ON assessment_creation_events, scope_events, baseline_evaluations TO uptip_runtime'))
         dedicated = create_engine(test_runtime_url, hide_parameters=True)
         with migration_engine.connect() as connection:
             assert connection.scalar(text('SELECT version_num FROM alembic_version')) == '0016'
@@ -174,6 +173,13 @@ def migration_db(monkeypatch):
             yield session
             session.rollback()
     finally:
+        from app.database import session_factory
+
+        if session_factory.cache_info().currsize:
+            cached_factory = session_factory()
+            cached_factory.kw['bind'].dispose()
+            session_factory.cache_clear()
+
         if dedicated is not None:
             dedicated.dispose()
         if migration_engine is not None:

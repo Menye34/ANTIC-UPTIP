@@ -246,19 +246,22 @@ def test_service_migration_metadata_and_empty_rollback(migration_db):
     from app.database import Base
     from sqlalchemy import create_engine
     engine=create_engine(migration_db.info['migration_test_migration_url'])
-    config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
-    config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
-    command.upgrade(config,'0023')
-    command.upgrade(config,'0024')
-    command.upgrade(config,'head')
-    with engine.connect() as conn:
-        assert compare_metadata(MigrationContext.configure(conn),Base.metadata)==[]
-        for table in ['service_discovery_consents','service_discovery_revocations']:
-            for priv in ['UPDATE','DELETE','TRUNCATE']:
-                assert not conn.scalar(text('SELECT has_table_privilege(\'uptip_runtime\',:table,:priv)'),{'table':table,'priv':priv})
-            assert conn.scalar(text("SELECT count(*) FROM pg_trigger WHERE tgrelid=to_regclass(:table) AND NOT tgisinternal"),{'table':table})==3
-    command.downgrade(config,'0023')
-    command.upgrade(config,'0024')
+    try:
+        config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
+        config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
+        command.upgrade(config,'0023')
+        command.upgrade(config,'0024')
+        command.upgrade(config,'head')
+        with engine.connect() as conn:
+            assert compare_metadata(MigrationContext.configure(conn),Base.metadata)==[]
+            for table in ['service_discovery_consents','service_discovery_revocations']:
+                for priv in ['UPDATE','DELETE','TRUNCATE']:
+                    assert not conn.scalar(text('SELECT has_table_privilege(\'uptip_runtime\',:table,:priv)'),{'table':table,'priv':priv})
+                assert conn.scalar(text("SELECT count(*) FROM pg_trigger WHERE tgrelid=to_regclass(:table) AND NOT tgisinternal"),{'table':table})==3
+        command.downgrade(config,'0023')
+        command.upgrade(config,'0024')
+    finally:
+        engine.dispose()
 
 
 def test_service_after_capability_update_preserves_original_start(client,db,prepared):
