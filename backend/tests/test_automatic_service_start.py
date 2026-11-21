@@ -44,10 +44,10 @@ def test_normal_start_prepares_fixed_ports_and_replay_without_port_input(client,
     assert review['confirmation_possible'] and review['mode'] == 'full'
     assert len(review['eligible_activities']) == 2 and review['excluded_activities'] == []
     service = review['eligible_activities'][1]['scheduling_preparation']
-    assert service['scheduling_policy']['version'] == 2
-    assert service['scheduling_policy']['baseline_tcp_ports'] == [80, 443]
-    assert service['plan']['ports'] == [80, 443]
-    assert service['plan']['arguments'][-2:] == ['-p', '80,443']
+    assert service['scheduling_policy']['version'] == 3
+    assert service['scheduling_policy']['baseline_tcp_ports'] == [80, 443, 3000, 5000, 8000, 8080, 8443, 8888]
+    assert service['plan']['ports'] == [80, 443, 3000, 5000, 8000, 8080, 8443, 8888]
+    assert service['plan']['arguments'][-2:] == ['-p', '80,443,3000,5000,8000,8080,8443,8888']
     assert first['execution_authorized'] is False
     assert db.scalar(select(func.count()).select_from(ServiceDiscoveryConsent)) == 0
     key = str(uuid4())
@@ -121,7 +121,7 @@ def test_completed_service_without_http_evidence_never_invents_recommendations(c
 def test_fixed_policy_rejects_other_ports_even_with_recomputed_fingerprint(client, automatic):
     path, _ = automatic
     value = get_review(client, path)['start_review']['eligible_activities'][1]['scheduling_preparation']
-    for ports in ([22], [80, 443, 8080], [8080], [443, 443]):
+    for ports in ([22], [80, 443, 8081], [8081], [443, 443]):
         with pytest.raises(ValueError):
             service_policy.prepare(value['host_preparation'], ports)
     bad = deepcopy(value)
@@ -193,6 +193,7 @@ def test_v1_policy_definition_and_digest_are_preserved():
            'dependencies': ['network-discovery']}
     assert service_policy.policy(1) == {**old, 'digest': fingerprint(old)}
     assert service_policy.policy(2)['digest'] != service_policy.policy(1)['digest']
+    assert service_policy.policy(3)['digest'] != service_policy.policy(2)['digest']
 
 
 def test_old_review_is_stale_after_policy_version_change(client, db, automatic, monkeypatch):
@@ -260,3 +261,33 @@ def test_automatic_start_with_application_role_without_worker_privileges(schedul
     finally:
         app.dependency_overrides[get_db] = original
         engine.dispose()
+
+
+def test_v2_receipt_definition_preserved_and_v3_expands_only_new_starts():
+    from app.nmap_service_profile import plan
+    v2 = service_policy.policy(2)
+    old = {'id': 'uptip-scoped-service-scheduling', 'version': 2, 'purpose': 'schedule_only',
+           'dispatch_policy_digest': service_policy.authority()['digest'],
+           'scope': 'authorized-ipv4-fixed-web-ports', 'max_ports': 2,
+           'required_capability': 'tcp-service-discovery',
+           'dependencies': ['network-discovery'], 'baseline_tcp_ports': [80, 443]}
+    assert v2 == {**old, 'digest': fingerprint(old)}
+    assert service_policy.policy(3)['max_ports'] == 8
+    assert plan('192.0.2.1', list(service_policy.BASELINE_PORTS))['ports'] == list(service_policy.BASELINE_PORTS)
+    with pytest.raises(ValueError):
+        service_policy.prepare({'target_value': '192.0.2.1'}, [8080], version=2)
+
+
+def test_http_on_nonstandard_port_is_normalized_and_recommended():
+    from types import SimpleNamespace
+    from app.execution_results import parse_services
+    from app.recommendation_planner import plan_recommendations
+    fact, = parse_services(xml([(8080, 'open', 'http', 'probed', None)]), '192.0.2.1', [8080])
+    assert fact['port'] == 8080 and fact['service'] == 'http'
+    source = SimpleNamespace(id=uuid4(), target_id=uuid4(), evidence_id=uuid4(),
+                             observation_type='service_discovery', data=fact, is_partial=False)
+    recommendations = plan_recommendations([source])
+    assert len(recommendations) == 1
+    assert recommendations[0]['suggested_tool'] == 'Nikto'
+    assert recommendations[0]['port'] == 8080
+    assert not recommendations[0]['execution_available']

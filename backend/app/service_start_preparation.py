@@ -1,7 +1,7 @@
 """Release-owned service scheduling, reviewed through normal Start confirmation.
 
-Version 2 prepares HTTP/HTTPS discovery automatically. Version 1 is retained
-verbatim for immutable historical receipts/consents; callers cannot select a
+Version 3 expands automatic HTTP/HTTPS discovery to eight common TCP ports.
+Versions 1 and 2 remain immutable for historical receipts/consents; callers cannot select a
 policy through request data. Scheduling never grants scanner dispatch.
 """
 from copy import deepcopy
@@ -9,23 +9,25 @@ from .baseline_catalog import fingerprint
 from .nmap_service_profile import CAPABILITY, authority, canonical_ports, plan
 
 POLICY_ID = 'uptip-scoped-service-scheduling'
-VERSION = 2
-BASELINE_PORTS = (80, 443)
+VERSION = 3
+# Immutable release-owned definitions; never edit historical profiles in place.
+V2_BASELINE_PORTS = (80, 443)
+BASELINE_PORTS = (80, 443, 3000, 5000, 8000, 8080, 8443, 8888)
 
 
 def policy(version=None):
     version = VERSION if version is None else version
-    if type(version) is not int or version not in (1, 2):
+    if type(version) is not int or version not in (1, 2, 3):
         raise ValueError('Unsupported service scheduling policy')
-    if BASELINE_PORTS != (80, 443):
+    if V2_BASELINE_PORTS != (80, 443) or BASELINE_PORTS != (80, 443, 3000, 5000, 8000, 8080, 8443, 8888):
         raise ValueError('Fixed baseline port definition changed')
     value = {'id': POLICY_ID, 'version': version, 'purpose': 'schedule_only',
              'dispatch_policy_digest': authority()['digest'],
              'scope': 'exact-ipv4-explicit-tcp-ports' if version == 1 else 'authorized-ipv4-fixed-web-ports',
-             'max_ports': 16 if version == 1 else 2,
+             'max_ports': 16 if version == 1 else (2 if version == 2 else len(BASELINE_PORTS)),
              'required_capability': CAPABILITY, 'dependencies': ['network-discovery']}
-    if version == 2:
-        value['baseline_tcp_ports'] = list(BASELINE_PORTS)
+    if version in (2, 3):
+        value['baseline_tcp_ports'] = list(V2_BASELINE_PORTS if version == 2 else BASELINE_PORTS)
     return {**value, 'digest': fingerprint(value)}
 
 
@@ -36,13 +38,16 @@ def ports_for(db, assessment_id, target, version=None):
     legacy = authorized_ports(db, assessment_id, target)
     if version == 1:
         return legacy
-    return [p for p in BASELINE_PORTS if not legacy or p in legacy]
+    baseline = V2_BASELINE_PORTS if version == 2 else BASELINE_PORTS
+    return [p for p in baseline if not legacy or p in legacy]
 
 
 def prepare(host, ports=None, *, version=None):
     version = VERSION if version is None else version
-    ports = canonical_ports(list(BASELINE_PORTS) if ports is None else ports)
-    if version == 2 and any(p not in BASELINE_PORTS for p in ports):
+    policy(version)
+    baseline = V2_BASELINE_PORTS if version == 2 else BASELINE_PORTS
+    ports = canonical_ports(list(baseline) if ports is None else ports)
+    if version in (2, 3) and any(p not in baseline for p in ports):
         raise ValueError('Ports exceed the fixed service scheduling profile')
     value = {**deepcopy(host), 'profile_digest': authority()['digest'],
              'required_capability': CAPABILITY, 'scheduling_policy': policy(version),
