@@ -53,13 +53,13 @@ def upgrade():
     op.create_index('ix_recommended_observation_assessment','recommended_observations',['assessment_id','target_id'])
     # Least-privilege runtime access; processing records are append-only.
     op.execute("""
-    DO $
+    DO $$
     BEGIN
       IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'uptip_runtime') THEN
         GRANT SELECT, INSERT ON recommended_processing_outcomes TO uptip_runtime;
         GRANT SELECT, INSERT ON recommended_observations TO uptip_runtime;
       END IF;
-    END $;
+    END $$;
     """)
 
 
