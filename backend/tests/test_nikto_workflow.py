@@ -125,8 +125,7 @@ def test_worker_output_is_preserved_lazy_and_integrity_checked(client, db, accep
         'execution_queued','execution_claimed','scanner_started','execution_finished']
     # Capturing Nikto output is not normalized finding processing. Preserve the gate.
     summary = client.get(path+'/testing/completion').json()['summary']
-    # Completion gating must be revisited to recognize recommended processing.
-    assert summary['missing_processing'] >= 0
+    assert summary['missing_processing'] == 1 and 'processing_not_clear' in summary['blockers']
 
 
 @pytest.mark.parametrize('reason,terminated', [('execution_timeout',True),('runtime_safety_lost',True),('termination_unverified',False)])
