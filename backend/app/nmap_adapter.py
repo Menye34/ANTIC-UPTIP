@@ -111,8 +111,19 @@ class NmapAdapter:
             os.close(fd)
             raise
 
+    def validate_execution_plan(self, plan):
+        return validate_plan(plan)
+
+    def command(self, plan, version_probe):
+        return ([self.config.executable, '--version'] if version_probe else
+                [self.config.executable, *plan['arguments'], plan['target']])
+
+    def environment(self):
+        return {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
+                'HOME': '/nonexistent', 'NMAP_UNPRIVILEGED': '1'}
+
     def run(self, plan, *, safe, launched, version_probe=False, launch_guard=nullcontext):
-        if not version_probe and not validate_plan(plan):
+        if not version_probe and not self.validate_execution_plan(plan):
             raise AdapterUnavailable('unsupported_invocation')
         try:
             fd = self._open_executable()
@@ -123,15 +134,13 @@ class NmapAdapter:
         reason = 'scanner_exited'
         terminated = True
         try:
-            argv = [self.config.executable, '--version'] if version_probe else [
-                self.config.executable, *plan['arguments'], plan['target']]
+            argv = self.command(plan, version_probe)
             with launch_guard():
                 if not safe():
                     raise AdapterUnavailable('prelaunch_authorization_denied')
                 process = subprocess.Popen(argv, executable=f'/proc/self/fd/{fd}', pass_fds=(fd,),
                     shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C', 'HOME': '/nonexistent',
-                         'NMAP_UNPRIVILEGED': '1'}, cwd='/', start_new_session=True,
+                    env=self.environment(), cwd='/', start_new_session=True,
                     preexec_fn=_no_new_privileges)
                 launched(process_identity(process.pid))
             deadline = time.monotonic() + (5 if version_probe else self.config.timeout)
