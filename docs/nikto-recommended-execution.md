@@ -330,3 +330,127 @@ The Codex harness is external to the repository. On Kali, use the isolated-clust
 procedure above, then run `python -m pytest -q` with the same paths to reproduce
 the broad suite; no operational URL or migration command belongs in that test
 environment.
+
+## Containment initialization correction after Kali acceptance failure
+
+### Confirmed defect versus remaining Kali evidence
+
+The Kali traceback provided for the nine failures ends at the old catch-all
+rethrow (`nikto_network_boundary.py:142`). It does not retain the original
+exception or helper stderr. Therefore that trace alone cannot establish which
+subprocess failed, or exclude additional environment-specific failures.
+
+A controlled rootless reproduction identified a concrete initialization defect:
+the holder started and its three namespace FDs could be opened, but util-linux
+2.41.5 `nsenter --user=... --net=... /usr/bin/id` exited 1 with
+`setgroups failed: Operation not permitted`. Adding `--preserve-credentials`
+made the same namespace entry exit 0 and report namespace UID/GID 0. This
+reproduction created only temporary namespaces; it did not invoke a scanner or
+contact a target. The regression smoke now exercises the corrected entry using
+the real read-only holder, without nftables/slirp or networking.
+
+`unshare --map-root-user` disables setgroups in its rootless user namespace.
+nsenter's default credential reset then attempts a forbidden setgroups call.
+The corrected **trusted firewall setup helper** uses `--preserve-credentials`
+with the same pinned holder identity. No unsupported `--setgroups` flag, root
+worker or fallback to host networking is introduced. The scanner's separate
+capability/bounding-set drop, NOROOT, no-new-privileges and seccomp logic is
+unchanged. Preserving setup-helper credentials does not authorize the scanner.
+
+This is a reproduced compatibility defect consistent with the Kali failure and
+earlier manual Kali experiments. It is not a claim that all nine Kali scenarios
+now pass, or that every other initialization stage is known to succeed there.
+
+### Safe diagnostics and cleanup
+
+Initialization reports an operator-only `NamespaceSetupError` and WARNING log:
+
+```
+nikto_containment_setup_failed stage=firewall_install reason=nsenter_setgroups_denied exit=1 errno=None
+```
+
+Stages distinguish helper trust, holder launch/readiness, namespace FD pinning,
+firewall installation, slirp launch/readiness, final boundary verification and
+unverified cleanup. Exit status is included when known; a still-running helper
+has `None`, never a fabricated exit code. OS failures include numeric errno.
+The holder emits fixed stage/errno markers for mount-private, read-only mount,
+dumpability and architecture failures. Only a bounded 2 KiB diagnostic prefix is
+inspected and converted to fixed reason codes; raw helper stderr, argv, paths,
+environment values and scanner output are never logged or returned.
+
+All setup failures still prevent yielding an enforced boundary. Partial setup
+closes namespace FDs and helper streams and terminates/reaps helpers. Unverified
+cleanup still poisons the context. Caller/scanner exceptions are no longer
+misclassified as initialization failures. Existing worker/API handling retains
+generic unavailable/blocked outcomes rather than exposing internal diagnostics
+to analysts. There are no worker, frontend, API, schema or policy changes in
+this correction, and no automatic retry of previously Blocked jobs.
+
+### Kali acceptance commands
+
+After importing this correction, run as the ordinary `menye` account, not root:
+
+```bash
+cd ~/ANTIC_Project/UPTIP/frontend
+source .venv/bin/activate
+git branch --show-current
+git log -1 --format='%H%n%s'
+export UPTIP_NIKTO_CONTAINMENT_TEST=1
+export UPTIP_AUTHORIZED_TEST_IPV4=192.168.161.131
+PYTHONPATH=backend python -m pytest -q \
+  backend/tests/test_nikto_network_boundary.py \
+  -k kali_kernel_containment --tb=short --log-cli-level=WARNING
+unset UPTIP_NIKTO_CONTAINMENT_TEST UPTIP_AUTHORIZED_TEST_IPV4
+```
+
+All nine scenarios must actually pass. These tests use two temporary local TCP
+listeners, not Nikto or an external scan. No database URL is required. The
+ordinary unit/bootstrap suite can also be run without any database:
+
+```bash
+PYTHONPATH=backend python -m pytest -q backend/tests/test_nikto_network_boundary.py
+```
+
+Without explicit containment opt-in, nine acceptance cases are deliberately
+skipped; a passing rootless bootstrap smoke does not replace them. The smoke
+may itself skip when the execution environment forbids unprivileged namespaces.
+
+If initialization still fails, share only the fixed-code
+`nikto_containment_setup_failed` line plus these read-only version/capability
+diagnostics; do not share environment files, raw scanner output or credentials:
+
+```bash
+uname -r
+nsenter --version
+slirp4netns --version
+nft --version
+sysctl kernel.unprivileged_userns_clone
+```
+
+The stage identifies which helper needs targeted follow-up. Do not drop sandbox
+options, read-only mounts, firewall rules or seccomp to work around another
+failure. No migration or operational database action is needed for this patch.
+Nikto policy version 1 and all existing plan digests remain unchanged and
+disabled pending the separately reviewed acceptance/activation process.
+
+### Correction validation record
+
+* `PYTHONPATH=backend .venv/bin/python -m pytest -q backend/tests/test_nikto_network_boundary.py`:
+  **21 passed, 9 skipped**, one existing Starlette/httpx warning. This includes
+  a real rootless holder/nsenter credential smoke; the skips are exclusively the
+  nine full Kali firewall/slirp scenarios.
+* The same disposable-cluster harness and 27 exact backend paths listed in the
+  preceding verification record were rerun: **477 passed, 9 skipped, 0 failed**
+  on Python 3.12/PostgreSQL 16.2. Existing Starlette deprecation and mapped-class
+  collection warnings remain; the harness also reported its existing runtime-dir
+  fallback. No operational database was accessed.
+* `npm test -- --run`: **315 passed**, 16 test files. `npm run lint` and
+  `npm run build`: passed, including TypeScript. No frontend files changed.
+* `.venv/bin/python -m compileall -q backend/app backend/migrations backend/tests`
+  and `git diff --check`: passed.
+
+Only `backend/app/nikto_network_boundary.py`, its network-boundary test module
+and this document change in the correction. No policy, migration, authorization,
+scanner argument, Nmap adapter, worker or frontend contract changes are included.
+PostgreSQL 18/Python 3.13 acceptance and the nine actual Kali containment
+scenarios are not claimed as passed.

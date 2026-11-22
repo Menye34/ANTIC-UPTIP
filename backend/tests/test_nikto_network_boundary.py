@@ -113,3 +113,144 @@ print(json.dumps({'allowed':ok,'caps':[l.strip() for l in open('/proc/self/statu
     finally:
         for listener in sockets: listener.close()
         temporary.cleanup()
+
+
+@pytest.fixture
+def simulated_setup(monkeypatch):
+    """Exercise production initialization/cleanup with no real networking."""
+    import tempfile
+    import app.nikto_network_boundary as module
+    calls, processes, pinned = [], [], []
+    state = {'fail': None}
+    original_open = os.open
+    class Process:
+        pid = 424242
+        returncode = None
+        def __init__(self, kind):
+            self.kind = kind
+            self.stdin, self.stdout, self.stderr = [tempfile.TemporaryFile() for _ in range(3)]
+        def poll(self): return self.returncode
+    def popen(args, **kwargs):
+        kind = 'holder' if args[0] == TOOLS['unshare'] else 'slirp'
+        calls.append((kind,args,kwargs))
+        if state['fail'] == kind+'_start': raise PermissionError(13,'sensitive path must not appear')
+        process=Process(kind);processes.append(process)
+        return process
+    def ready(fd, process):
+        if state['fail'] == process.kind+'_ready':
+            process.returncode=1
+            if process.kind=='holder':
+                process.stderr.write(b'uptip_holder_failure stage=mount_readonly errno=1\nprivate-secret\n')
+                process.stderr.seek(0)
+            raise AdapterUnavailable('nikto_namespace_ready_eof')
+        return b'424242' if process.kind=='holder' else b'1'
+    def opening(path, flags, *args, **kwargs):
+        if str(path).startswith('/proc/424242/ns/'):
+            if state['fail']=='namespace_pin': raise PermissionError(13,'private-secret')
+            fd=original_open('/dev/null',flags);pinned.append(fd);return fd
+        return original_open(path,flags,*args,**kwargs)
+    def run(args,**kwargs):
+        calls.append(('firewall',args,kwargs))
+        if state['fail']=='firewall_install' or '--preserve-credentials' not in args:
+            raise subprocess.CalledProcessError(1,args,stderr=b'nsenter: setgroups failed: Operation not permitted\nprivate-secret')
+        return subprocess.CompletedProcess(args,0)
+    def stop(process): process.returncode=-15;return True
+    monkeypatch.setattr(module,'trusted_tool',lambda path:path)
+    monkeypatch.setattr(module.subprocess,'Popen',popen)
+    monkeypatch.setattr(module.subprocess,'run',run)
+    monkeypatch.setattr(module,'read_ready',ready)
+    monkeypatch.setattr(module.os,'open',opening)
+    from app.nmap_adapter import SupervisedToolAdapter
+    monkeypatch.setattr(SupervisedToolAdapter,'_stop',stop)
+    return state,calls,processes,pinned
+
+
+def test_setup_preserves_credentials_and_does_not_weaken_boundary(simulated_setup):
+    _,calls,processes,pinned=simulated_setup
+    boundary=NamespaceBoundary()
+    with boundary.restrict('192.0.2.1',8080):
+        assert boundary.enforced
+        firewall=next(row for row in calls if row[0]=='firewall')
+        assert '--preserve-credentials' in firewall[1]
+        assert any(arg.startswith('--user=') for arg in firewall[1])
+        assert any(arg.startswith('--net=') for arg in firewall[1])
+        assert not any(arg.startswith('--setgroups') for arg in firewall[1])
+        assert firewall[2]['input']==rules('192.0.2.1',8080).encode()
+        slirp=next(row for row in calls if row[0]=='slirp')[1]
+        for flag in ('--disable-host-loopback','--enable-sandbox','--enable-seccomp'):
+            assert flag in slirp
+        assert boundary._endpoint==('192.0.2.1',8080)
+    assert not boundary.enforced and boundary._fds==()
+    assert all(p.returncode==-15 for p in processes)
+    for fd in pinned:
+        with pytest.raises(OSError):os.fstat(fd)
+
+
+@pytest.mark.parametrize('stage,reason,code,number',[
+    ('holder_start','os_error',None,13),
+    ('holder_ready','holder_mount_readonly_failed',1,1),
+    ('namespace_pin','os_error',None,13),
+    ('firewall_install','nsenter_setgroups_denied',1,None),
+    ('slirp_start','os_error',None,13),
+    ('slirp_ready','helper_ready_eof',1,None),
+])
+def test_setup_failures_identify_stage_without_exposing_raw_diagnostics(simulated_setup,caplog,stage,reason,code,number):
+    from app.nikto_network_boundary import NamespaceSetupError
+    state,_,processes,pinned=simulated_setup;state['fail']=stage
+    boundary=NamespaceBoundary()
+    with pytest.raises(NamespaceSetupError) as failure:
+        with boundary.restrict('192.0.2.1',8080): pytest.fail('must not yield or launch scanner')
+    error=failure.value
+    assert (error.stage,error.reason,error.returncode,error.error_number)==(stage,reason,code,number)
+    assert 'private-secret' not in caplog.text+str(error)
+    assert 'sensitive path' not in caplog.text+str(error)
+    assert stage in caplog.text and reason in caplog.text
+    assert not boundary.enforced and boundary._fds==()
+    assert all(p.poll() is not None for p in processes)
+    for fd in pinned:
+        with pytest.raises(OSError):os.fstat(fd)
+
+
+def test_scanner_body_failures_are_not_mislabeled_setup_failures(simulated_setup,caplog):
+    boundary=NamespaceBoundary()
+    with pytest.raises(RuntimeError,match='caller failure'):
+        with boundary.restrict('192.0.2.1',8080): raise RuntimeError('caller failure')
+    assert 'nikto_containment_setup_failed' not in caplog.text
+    assert not boundary.enforced
+
+
+def test_setup_timeout_diagnostics_are_sanitized(caplog):
+    from app.nikto_network_boundary import setup_failure
+    error=setup_failure('firewall_install',subprocess.TimeoutExpired(['private-path'],5,stderr=b'private-secret'))
+    assert error.reason=='helper_timeout' and error.returncode is None
+    assert 'private-' not in caplog.text+str(error)
+
+
+def test_rootless_nsenter_credential_preservation_smoke():
+    """Real user/net/mount bootstrap only; no nft/slirp, scanner or network traffic.
+
+    This is not one of the nine full kernel-containment acceptance scenarios.
+    """
+    from app.nikto_network_boundary import HOLDER,ENV,read_ready
+    from app.nmap_adapter import _no_new_privileges
+    if not all(Path(TOOLS[key]).exists() for key in ('unshare','nsenter','python')):
+        pytest.skip('Rootless namespace smoke requires local util-linux/Python')
+    probe=subprocess.run([TOOLS['unshare'],'--user','--map-root-user',TOOLS['python'],'-I','-c','pass'],
+        capture_output=True,timeout=5,env=ENV)
+    if probe.returncode:
+        pytest.skip('Execution environment does not permit unprivileged user namespaces')
+    process=subprocess.Popen([TOOLS['unshare'],'--user','--map-root-user','--net','--mount',
+        TOOLS['python'],'-I','-c',HOLDER],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+        env=ENV,start_new_session=True,preexec_fn=_no_new_privileges)
+    try:
+        assert int(read_ready(process.stdout.fileno(),process))==process.pid
+        result=subprocess.run([TOOLS['nsenter'],'--preserve-credentials',f'--user=/proc/{process.pid}/ns/user',
+            f'--net=/proc/{process.pid}/ns/net','--',TOOLS['python'],'-I','-c',
+            "import os;print(os.geteuid());print(os.getgroups())"],capture_output=True,env=ENV,timeout=5)
+        assert result.returncode==0,result.stderr.decode(errors='replace')
+        assert result.stdout.splitlines()[0]==b'0'
+    finally:
+        process.stdin.close()
+        try:process.wait(timeout=5)
+        except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
+        process.stdout.close();process.stderr.close()
