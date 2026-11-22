@@ -108,6 +108,14 @@ class RecommendedTestRunner:
                 record_outcome(job, outcome)
                 event(db, job, 'execution_finished' if outcome.terminated else 'recovery_required',
                       job.failure_reason or 'scanner_output_recorded')
+            # Independent post-commit processing cannot roll back a completed scan.
+            # A failed parser leaves the original output available for investigation.
+            try:
+                from .recommended_normalization import process_job
+                with self.factory.begin() as db:
+                    process_job(db, job_id)
+            except Exception:
+                pass
             return True
         except Exception as exc:
             if claimed:
