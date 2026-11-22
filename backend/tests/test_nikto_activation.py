@@ -12,7 +12,7 @@ from app.nmap_adapter import AdapterUnavailable, ScanOutcome
 @pytest.fixture
 def config(monkeypatch):
     from app import config as module
-    settings=SimpleNamespace(nikto_policy_version=None,nikto_policy_digest=None,nikto_policy_approval_reference=None)
+    settings=SimpleNamespace(nikto_policy_version=None,nikto_policy_digest=None)
     monkeypatch.setattr(module,'get_settings',lambda:settings)
     return settings
 
@@ -20,7 +20,6 @@ def config(monkeypatch):
 def approve(settings):
     settings.nikto_policy_version=2
     settings.nikto_policy_digest=profile.authority(2)['digest']
-    settings.nikto_policy_approval_reference='local-acceptance-ticket-123'
 
 
 def test_disabled_historical_definition_and_digest_are_preserved(config):
@@ -32,24 +31,22 @@ def test_disabled_historical_definition_and_digest_are_preserved(config):
     assert not profile.dispatch_enabled(profile.plan('192.0.2.1',8080,'http'))
 
 
-def test_v2_requires_exact_explicit_operator_configuration(config):
+def test_v2_requires_exact_system_policy_configuration(config):
     approve(config)
     candidate=profile.plan('192.0.2.1',8080,'http',version=2)
     assert profile.validate_plan(candidate) and profile.dispatch_enabled(candidate)
-    assert profile.activation()['approval_reference']=='local-acceptance-ticket-123'
+    assert profile.activation()['policy']['version']==2
     for field,value in (('port',8081),('policy_digest','0'*64),('profile_version',1),('parameter_digest','0'*64)):
         assert not profile.dispatch_enabled({**candidate,field:value})
-    config.nikto_policy_approval_reference=None
-    assert not profile.dispatch_enabled(candidate)
+    assert profile.dispatch_enabled(candidate)
 
 
 @pytest.mark.parametrize('field,value',[
     ('nikto_policy_version',None),('nikto_policy_version',1),('nikto_policy_version',999),
     ('nikto_policy_digest',None),('nikto_policy_digest','0'*64),('nikto_policy_digest','é'*64),
-    ('nikto_policy_approval_reference',None),('nikto_policy_approval_reference',''),
-    ('nikto_policy_approval_reference','approval\nforged-log'),
+
 ])
-def test_partial_invalid_or_mismatched_approval_is_denied(config,field,value):
+def test_partial_invalid_or_mismatched_system_policy_is_denied(config,field,value):
     approve(config);setattr(config,field,value)
     with pytest.raises(ValueError):profile.activation()
     assert not profile.dispatch_enabled(profile.plan('192.0.2.1',8080,'http',version=2))
@@ -115,7 +112,10 @@ def test_nikto_hash_mismatch_never_invokes_scanner(tmp_path,monkeypatch):
     # Only model trust ownership for a synthetic local fixture, never a scanner.
     original_stat,original_fstat=module.Path.stat,module.os.fstat
     def owned(info):
-        values=list(info);values[4]=0;return os.stat_result(values)
+        values=list(info)
+        values[4]=0
+        values[0] &= ~0o022
+        return os.stat_result(values)
     monkeypatch.setattr(module,'verify_privileges',lambda:None)
     monkeypatch.setattr(module.Path,'stat',lambda self,*a,**kw:owned(original_stat(self,*a,**kw)))
     monkeypatch.setattr(module.os,'fstat',lambda fd:owned(original_fstat(fd)))

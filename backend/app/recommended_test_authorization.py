@@ -71,7 +71,7 @@ def preparation(db, assessment_id, actor_id, recommendation_id, *, lock=True):
              'plan': candidate}
     if selected['policy']['version'] == 2:
         facts['dispatch_activation'] = {'policy_id': selected['policy']['id'], 'version': 2,
-            'digest': selected['policy']['digest'], 'approval_reference': selected['approval_reference']}
+            'digest': selected['policy']['digest']}
     return facts
 
 

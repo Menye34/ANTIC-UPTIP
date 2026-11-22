@@ -1,4 +1,4 @@
-"""Release-owned versioned Nikto profiles; deployment approval is separate consent."""
+"""Release-owned versioned Nikto profiles with system-enforced activation."""
 from copy import deepcopy
 from ipaddress import IPv4Address
 import re
@@ -45,24 +45,21 @@ def authority(version=VERSION):
 
 
 def activation():
-    # Only deployment operators can change process configuration. This approval
-    # activates one exact release policy, never an assessment or arbitrary target.
+    # Trusted system configuration selects one exact release policy.
+    # Analyst consent is verified separately for each recommended execution.
     from .config import get_settings
     settings = get_settings()
-    values = (settings.nikto_policy_version, settings.nikto_policy_digest,
-              settings.nikto_policy_approval_reference)
-    if all(value is None for value in values):
-        return {'policy': authority(1), 'approval_reference': None}
-    version, digest, reference = values
-    if (version != 2 or type(version) is not int or not isinstance(reference, str)
-            or not 3 <= len(reference) <= 160 or not reference.isascii()
-            or any(not (c.isalnum() or c in '-_./:') for c in reference)):
+    version = settings.nikto_policy_version
+    digest = settings.nikto_policy_digest
+    if version is None and digest is None:
+        return {'policy': authority(1)}
+    if type(version) is not int or version != 2:
         raise ValueError('nikto_policy_activation_invalid')
     policy = authority(version)
     from hmac import compare_digest
     if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest) or not compare_digest(digest, policy['digest']):
         raise ValueError('nikto_policy_activation_invalid')
-    return {'policy': policy, 'approval_reference': reference}
+    return {'policy': policy}
 
 
 def integration_available():

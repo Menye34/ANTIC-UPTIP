@@ -34,13 +34,12 @@ def accepted(client, db, completed):
 
 @pytest.fixture
 def test_release(monkeypatch):
-    # Explicit synthetic deployment approval in disposable tests only. Never
-    # mutate disabled historical v1 or its digest to obtain positive coverage.
+    # Select the release-owned Version 2 policy in disposable tests.
+    # Historical Version 1 remains disabled and unchanged.
     from app.config import get_settings
     settings=get_settings()
     monkeypatch.setattr(settings,'nikto_policy_version',2)
     monkeypatch.setattr(settings,'nikto_policy_digest',nikto_profile.authority(2)['digest'])
-    monkeypatch.setattr(settings,'nikto_policy_approval_reference','disposable-test-approval')
 
 
 def queue(client, db, accepted):
@@ -466,12 +465,12 @@ def test_old_v1_queue_is_not_upgraded_or_dispatched_under_v2(client,db,accepted,
     assert client.get(url+'-receipt').json()['id']==str(job.id)
 
 
-def test_operator_approval_change_invalidates_review_and_queued_consent(client,db,accepted,test_release,monkeypatch):
+def test_system_policy_change_invalidates_review_and_queued_consent(client,db,accepted,test_release,monkeypatch):
     from app.config import get_settings
     job,_,_=queue(client,db,accepted)
     assert job.profile_version==2 and job.authorization_snapshot['dispatch_activation']['version']==2
     assert fresh_scope_check(db,job)
-    monkeypatch.setattr(get_settings(),'nikto_policy_approval_reference','different-reviewed-release')
+    monkeypatch.setattr(get_settings(),'nikto_policy_digest','0'*64)
     assert not fresh_scope_check(db,job)
     adapter=FakeNikto()
     assert not RecommendedTestRunner(BorrowedFactory(db),adapter,boundary=FakeBoundary()).run(job.id)
