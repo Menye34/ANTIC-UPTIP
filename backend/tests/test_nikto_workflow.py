@@ -499,11 +499,11 @@ def test_activated_policy_keeps_tool_port_and_consent_requirements(client,db,acc
 
 def test_nikto_normalizer_only_extracts_explicit_path_observations():
     from app.nikto_normalizer import normalize
-    content = (b'- Nikto v2.6.1\\n'
-               b'+ Server: example\\n'
-               b'+ /admin/: The X-Frame-Options header is missing.\\n'
-               b'+ /admin/: The X-Frame-Options header is missing.\\n'
-               b'+ OSVDB-123: informational text without a path\\n')
+    content = (b'- Nikto v2.6.1\n'
+               b'+ Server: example\n'
+               b'+ /admin/: The X-Frame-Options header is missing.\n'
+               b'+ /admin/: The X-Frame-Options header is missing.\n'
+               b'+ OSVDB-123: informational text without a path\n')
     rows = normalize(content, target='192.0.2.10', port=80, scheme='http')
     assert len(rows) == 1
     assert rows[0]['type'] == 'http_server_test'
@@ -517,7 +517,7 @@ def test_nikto_results_are_persisted_and_returned_without_raw_output(client, db,
     job, _, _ = queue(client, db, accepted)
     adapter = FakeNikto()
     adapter.outcome = replace(adapter.outcome, stdout=(
-        b'- Nikto v2.6.1\\n+ /admin/: Missing security header.\\n'))
+        b'- Nikto v2.6.1\n+ /admin/: Missing security header.\n'))
     runner = RecommendedTestRunner(BorrowedFactory(db), adapter, boundary=FakeBoundary())
     assert runner.run(job.id)
     assert db.scalar(select(func.count()).select_from(RecommendedProcessingOutcome)) == 1
