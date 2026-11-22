@@ -93,9 +93,9 @@ try:
  elif kind=='ipv6':socket.socket(socket.AF_INET6,socket.SOCK_STREAM);ok=True
  elif kind=='firewall':ok=subprocess.run(['/usr/sbin/nft','flush','ruleset'],capture_output=True).returncode==0
  elif kind=='escape':
- libc=ctypes.CDLL(None,use_errno=True);result=libc.setns(-1,0x40000000)
- # EBADF without syscall filtering; EPERM proves the escape syscall is denied.
- ok=not (result==-1 and ctypes.get_errno()==1)
+  libc=ctypes.CDLL(None,use_errno=True);result=libc.setns(-1,0x40000000)
+  # EBADF without syscall filtering; EPERM proves the escape syscall is denied.
+  ok=not (result==-1 and ctypes.get_errno()==1)
  elif kind=='readonly':
   with open(p['probe'],'w') as f:f.write('bad')
   ok=True
