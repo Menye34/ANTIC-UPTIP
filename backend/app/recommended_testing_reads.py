@@ -6,6 +6,7 @@ from sqlalchemy import select, func, literal, LargeBinary
 from .models import Assessment
 from .assessment_routes import accessible
 from .recommended_test_queue import RecommendedTestJob as Job, RecommendedTestEvent as Event
+from .recommended_normalization_models import RecommendedProcessingOutcome as Processing, RecommendedObservation as Observation
 
 
 def output_verified():
@@ -63,8 +64,34 @@ def details(db, assessment_id, execution_id, user):
             evidence.append({'id': str(execution_id if stream == 'stdout' else uuid5(execution_id, 'stderr')),
                 'format': 'nikto-'+stream, 'size_bytes': row[stream+'_size'], 'sha256': row[stream+'_sha256'],
                 'partial': row['output_partial'] is not False, 'collected_at': row['finished_at'] or row['updated_at']})
+    processing = []
+    observations = []
+    if row['output_verified'] is True and row['termination_verified'] is True and row['output_partial'] is False:
+        records = db.scalars(select(Processing).where(
+            Processing.job_id == execution_id,
+            Processing.assessment_id == assessment_id,
+            Processing.target_id == row['target_id']).order_by(Processing.finished_at, Processing.id)).all()
+        processing = [{'id': str(p.id), 'evidence_id': str(execution_id),
+                       'processor': p.processor, 'processor_version': p.processor_version,
+                       'status': p.status, 'error_code': p.error_code,
+                       'observation_count': p.observation_count, 'is_partial': False,
+                       'finished_at': p.finished_at} for p in records]
+        valid = [p.id for p in records if p.status == 'Succeeded']
+        if valid:
+            found_observations = db.scalars(select(Observation).where(
+                Observation.processing_id.in_(valid),
+                Observation.job_id == execution_id,
+                Observation.assessment_id == assessment_id,
+                Observation.target_id == row['target_id']).order_by(Observation.collected_at, Observation.id)).all()
+            observations = [{'id': str(o.id), 'type': o.observation_type,
+                             'data': o.data, 'target_id': str(o.target_id),
+                             'evidence_id': str(execution_id),
+                             'processing_id': str(o.processing_id),
+                             'is_partial': o.is_partial,
+                             'collected_at': o.collected_at,
+                             'processed_at': o.processed_at} for o in found_observations]
     return {**execution_view(row), **dispatch_history(events), 'authorized_activity': row['execution_plan'],
-            'attempts': [], 'processing': [], 'observations': [], 'events': events, 'evidence': evidence,
+            'attempts': [], 'processing': processing, 'observations': observations, 'events': events, 'evidence': evidence,
             'recommended_result': {'termination_verified': row['termination_verified'] is True,
                 'partial': row['output_partial'] is not False, 'integrity_verified': row['output_verified'] is True,
                 'failure_reason': row['failure_reason']}}
