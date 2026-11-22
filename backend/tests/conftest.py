@@ -29,9 +29,13 @@ def engine(database_url):
         url = make_url(database_url)
     except (SQLAlchemyError, ValueError):
         pytest.fail('Invalid UPTIP_TEST_DATABASE_URL.', pytrace=False)
-    if (url.drivername != 'postgresql+psycopg' or url.database != 'uptip_test_readiness_fix'
+    allowed_databases = {
+        'uptip_test_readiness_fix',
+        'uptip_test_nikto_normalization',
+    }
+    if (url.drivername != 'postgresql+psycopg' or url.database not in allowed_databases
             or url.host not in {'127.0.0.1', '::1'} or url.query):
-        pytest.fail('Use the dedicated local PostgreSQL database uptip_test_readiness_fix with no URL query options.',
+        pytest.fail('Use an explicitly allowed local disposable PostgreSQL test database with no URL query options.',
                     pytrace=False)
 
     engine = create_engine(url, hide_parameters=True)
@@ -45,10 +49,10 @@ def engine(database_url):
                 """)).one_or_none()
         except SQLAlchemyError:
             pytest.fail('Could not verify the disposable PostgreSQL test database.', pytrace=False)
-        if identity != ('uptip_test_readiness_fix', 'UPTIP disposable integration test database'):
+        if identity != (url.database, 'UPTIP disposable integration test database'):
             pytest.fail(
-                "After creating a dedicated disposable database, run "
-                "COMMENT ON DATABASE uptip_test_readiness_fix IS 'UPTIP disposable integration test database';",
+                'The selected disposable test database must carry the exact '
+                "'UPTIP disposable integration test database' marker.",
                 pytrace=False,
             )
 
@@ -221,7 +225,7 @@ def committed_db(engine, monkeypatch):
 
     if (
         source_url.drivername != "postgresql+psycopg"
-        or source_url.database != "uptip_test_readiness_fix"
+        or source_url.database not in {"uptip_test_readiness_fix", "uptip_test_nikto_normalization"}
         or source_url.host not in {"127.0.0.1", "::1"}
         or source_url.query
     ):
