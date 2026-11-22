@@ -496,3 +496,40 @@ def test_activated_policy_keeps_tool_port_and_consent_requirements(client,db,acc
     assert client.get(url+'-readiness').json()['reason_code']=='nikto_tool_unavailable'
     assert client.post(url,headers=headers,json={'snapshot_digest':ready['snapshot_digest']}).status_code==409
     assert db.scalar(select(func.count()).select_from(Job))==0
+
+
+def test_nikto_normalizer_only_extracts_explicit_path_observations():
+    from app.nikto_normalizer import normalize
+    content = (b'- Nikto v2.6.1\\n'
+               b'+ Server: example\\n'
+               b'+ /admin/: The X-Frame-Options header is missing.\\n'
+               b'+ /admin/: The X-Frame-Options header is missing.\\n'
+               b'+ OSVDB-123: informational text without a path\\n')
+    rows = normalize(content, target='192.0.2.10', port=80, scheme='http')
+    assert len(rows) == 1
+    assert rows[0]['type'] == 'http_server_test'
+    assert rows[0]['data']['path'] == '/admin/'
+    assert rows[0]['data']['verification'] == 'unverified'
+
+
+def test_nikto_results_are_persisted_and_returned_without_raw_output(client, db, accepted, test_release):
+    from app.recommended_normalization_models import RecommendedObservation, RecommendedProcessingOutcome
+    path, _, _ = accepted
+    job, _, _ = queue(client, db, accepted)
+    adapter = FakeNikto()
+    adapter.outcome = replace(adapter.outcome, stdout=(
+        b'- Nikto v2.6.1\\n+ /admin/: Missing security header.\\n'))
+    runner = RecommendedTestRunner(BorrowedFactory(db), adapter, boundary=FakeBoundary())
+    assert runner.run(job.id)
+    assert db.scalar(select(func.count()).select_from(RecommendedProcessingOutcome)) == 1
+    assert db.scalar(select(func.count()).select_from(RecommendedObservation)) == 1
+    view = client.get(path+f'/testing/executions/{job.id}').json()
+    assert view['recommended_result']['integrity_verified']
+    assert len(view['processing']) == 1 and view['processing'][0]['status'] == 'Succeeded'
+    assert len(view['observations']) == 1
+    assert view['observations'][0]['data']['path'] == '/admin/'
+    assert 'Missing security header' in view['observations'][0]['data']['message']
+    assert 'Nikto v2.6.1' not in str(view)
+    from app.recommended_normalization import process_job
+    process_job(db, job.id)
+    assert db.scalar(select(func.count()).select_from(RecommendedObservation)) == 1
