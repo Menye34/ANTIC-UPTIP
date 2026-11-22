@@ -290,8 +290,32 @@ def scheduling_concurrency(engine,monkeypatch,request):
                 check=True, timeout=30,
             )
 
+    # The local restricted helper creates databases on the verified port-5433
+    # cluster. Never connect to the identically named database on port 5432.
+    if not direct_admin and not ci_admin_url:
+        from sqlalchemy.engine import make_url
+        source_runtime = make_url(os.environ.get('UPTIP_DATABASE_URL', ''))
+        if not (
+            engine.url.drivername == 'postgresql+psycopg'
+            and engine.url.username == 'uptip'
+            and engine.url.host == '127.0.0.1'
+            and engine.url.port in (None, 5432)
+            and engine.url.database in ('uptip_test_readiness_fix', 'uptip_test_nikto_normalization')
+            and not engine.url.query
+            and source_runtime.drivername == 'postgresql+psycopg'
+            and source_runtime.username == 'uptip_runtime'
+            and source_runtime.host == '127.0.0.1'
+            and source_runtime.port in (None, 5432)
+            and source_runtime.database == 'uptip'
+            and not source_runtime.query
+        ):
+            raise RuntimeError('Refusing unverified local scheduling test database configuration')
+        runtime_url = source_runtime.set(port=5433, database=name)
+    else:
+        runtime_url = direct_runtime if direct_admin else engine.url.set(database=name)
+
     administer('create')
-    dedicated=create_engine(direct_runtime if direct_admin else engine.url.set(database=name))
+    dedicated=create_engine(runtime_url)
     settings=get_settings()
     try:
         with dedicated.connect() as c:
@@ -316,10 +340,14 @@ def scheduling_concurrency(engine,monkeypatch,request):
             and migration_url.port in (None, 5432)
             and not migration_url.query
             and dedicated.url.username == ("uptip" if ci_admin_url else "uptip_runtime")
+            and (ci_admin_url or dedicated.url.port == 5433)
         )):
             raise RuntimeError("Unsafe test migration database configuration")
 
-        migration_url = migration_url.set(database=name)
+        if not direct_admin and not ci_admin_url:
+            migration_url = migration_url.set(port=5433, database=name)
+        else:
+            migration_url = migration_url.set(database=name)
 
         monkeypatch.setattr(
             settings,
