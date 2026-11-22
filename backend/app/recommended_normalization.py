@@ -11,7 +11,9 @@ PROCESSOR = 'nikto-text'
 
 def process_job(db, job_id):
     """Caller owns a transaction. Never launches a scanner or changes job status."""
-    job = db.scalar(select(RecommendedTestJob).where(RecommendedTestJob.id == job_id).with_for_update())
+    # Reuse the queue's established security-definer locking protocol.
+    from .recommended_test_runner import locked
+    job = locked(db, job_id)
     if job is None or job.status != 'Completed' or job.tool != 'Nikto':
         return None
     if (job.termination_verified is not True or job.output_partial is not False
