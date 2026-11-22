@@ -75,7 +75,7 @@ def process_identity(pid):
     return f'{boot}:{pid}:{fields[19]}'
 
 
-class NmapAdapter:
+class SupervisedToolAdapter:
     def __init__(self, config):
         self.config = config
 
@@ -221,10 +221,15 @@ class NmapAdapter:
                 return False
         except OSError:
             return False
-        return process.poll() is not None and NmapAdapter._group_gone(process.pid)
+        return process.poll() is not None and SupervisedToolAdapter._group_gone(process.pid)
 
     def verify(self):
         outcome = self.run(None, safe=lambda: True, launched=lambda _: None, version_probe=True)
         if (outcome.exit_code != 0 or outcome.partial or not outcome.terminated
                 or not outcome.stdout.startswith(f'Nmap version {self.config.version} '.encode())):
             raise AdapterUnavailable('unsupported_nmap_version')
+
+
+class NmapAdapter(SupervisedToolAdapter):
+    """Independent Nmap tool adapter using the shared process supervisor."""
+

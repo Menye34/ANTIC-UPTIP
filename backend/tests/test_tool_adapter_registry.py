@@ -32,3 +32,11 @@ def test_unregistered_pairs_fail_closed(tool, profile):
 def test_cross_tool_config_is_rejected():
     with pytest.raises(ValueError, match='tool_configuration_mismatch'):
         resolve_adapter('Nikto', 'nikto-http-service-restricted', AdapterConfig('/usr/bin/nmap', 'a'*64, '7.95'))
+
+
+def test_tool_adapters_are_independent_implementations():
+    from backend.app.nmap_adapter import SupervisedToolAdapter
+    assert issubclass(NmapAdapter, SupervisedToolAdapter)
+    assert issubclass(NiktoAdapter, SupervisedToolAdapter)
+    assert not issubclass(NiktoAdapter, NmapAdapter)
+    assert not issubclass(NmapAdapter, NiktoAdapter)

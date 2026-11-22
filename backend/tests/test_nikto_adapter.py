@@ -8,9 +8,10 @@ def config():
     return NiktoConfig('/usr/bin/nikto', 'a'*64, '2.5.0')
 
 
-def test_reuses_supervised_adapter():
-    from backend.app.nmap_adapter import NmapAdapter
-    assert issubclass(NiktoAdapter, NmapAdapter)
+def test_reuses_shared_process_supervisor_without_inheriting_nmap_adapter():
+    from backend.app.nmap_adapter import NmapAdapter, SupervisedToolAdapter
+    assert issubclass(NiktoAdapter, SupervisedToolAdapter)
+    assert not issubclass(NiktoAdapter, NmapAdapter)
     adapter = NiktoAdapter(config())
     assert adapter.validate_execution_plan(plan('192.0.2.10', 8000, 'http'))
     assert adapter.command(plan('192.0.2.10', 8000, 'http'), False) == [

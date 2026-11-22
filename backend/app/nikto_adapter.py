@@ -6,7 +6,7 @@ fresh authorization, exact endpoint containment, and an operator-pinned binary.
 from dataclasses import dataclass
 import re
 
-from .nmap_adapter import NmapAdapter, AdapterUnavailable
+from .nmap_adapter import SupervisedToolAdapter, AdapterUnavailable
 from .nikto_profile import validate_plan
 
 
@@ -30,7 +30,7 @@ class NiktoConfig:
             raise AdapterUnavailable('invalid_nikto_executor_configuration')
 
 
-class NiktoAdapter(NmapAdapter):
+class NiktoAdapter(SupervisedToolAdapter):
     """Reuse process identity, privileges, pinning, supervision and termination."""
 
     def validate_execution_plan(self, plan):
