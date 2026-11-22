@@ -372,3 +372,6 @@ from .service_discovery_models import ServiceDiscoveryConsent, ServiceDiscoveryR
 
 # Separate queue for recommended tests; never an assessment-start request.
 from .recommended_test_queue import RecommendedTestJob
+
+# Independent normalized recommended-test observations.
+from .recommended_normalization_models import RecommendedProcessingOutcome, RecommendedObservation
