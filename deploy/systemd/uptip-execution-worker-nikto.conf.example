@@ -1,0 +1,8 @@
+# OPTIONAL drop-in for the EXISTING worker only. Review __PYTHON__ against
+# systemctl show ExecStart and preserve any additional local Nmap limit flags.
+# Do not install until operator approval, isolated version verification and
+# containment acceptance. Does not activate policy or restart the service.
+# Existing EnvironmentFile must supply all three UPTIP_NIKTO_* binary pins.
+[Service]
+ExecStart=
+ExecStart=__PYTHON__ -m app.execution_worker --executable ${UPTIP_NMAP_EXECUTABLE} --sha256 ${UPTIP_NMAP_SHA256} --version ${UPTIP_NMAP_VERSION} --evidence-directory ${UPTIP_EVIDENCE_DIRECTORY} --enable-dispatch --nikto-executable ${UPTIP_NIKTO_EXECUTABLE} --nikto-sha256 ${UPTIP_NIKTO_SHA256} --nikto-version ${UPTIP_NIKTO_VERSION}

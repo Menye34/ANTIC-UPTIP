@@ -144,13 +144,13 @@ export interface Recommendation {
   source_observation_id: string
   source_evidence_id: string
   execution_available: false
-  execution_status: 'not_supported' | 'pending_integration'
+  execution_status: 'not_supported' | 'pending_integration' | 'requires_start_review'
   suggested_test: string | null
   suggested_tool: string | null
   review_outcome?: 'Accepted' | 'Rejected' | null
   context_digest?: string
   explanation?: string[]
-  tool_integration_status?: 'pending_integration'
+  tool_integration_status?: 'pending_integration' | 'integrated'
   execution_unavailability_reason?: string
   proposed_test?: { id: string; version: number; name: string; tool: string; description: string; profile_id: null; definition_digest: string }
   source_test?: { test_name: string; tool: string; status: ExecutionStatus } | null
@@ -167,8 +167,11 @@ function validProposal(row: Recommendation): boolean {
   if (row.kind === 'review_host_discovery') return row.execution_status === 'not_supported'
     && row.suggested_test === null && row.suggested_tool === null && row.port === null && row.service === null
   const p = row.proposed_test
-  return row.execution_status === 'pending_integration' && row.tool_integration_status === 'pending_integration'
+  const pending = row.execution_status === 'pending_integration' && row.tool_integration_status === 'pending_integration'
     && row.execution_unavailability_reason === 'tool_integration_pending'
+  const integrated = row.suggested_tool === 'Nikto' && row.execution_status === 'requires_start_review'
+    && row.tool_integration_status === 'integrated' && row.execution_unavailability_reason === 'explicit_start_required'
+  return (pending || integrated)
     && typeof row.context_digest === 'string' && row.context_digest === row.id
     && Array.isArray(row.explanation) && row.explanation.length === 3
     && row.explanation.every(text => typeof text === 'string' && text.length > 0)

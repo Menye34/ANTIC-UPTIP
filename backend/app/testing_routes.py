@@ -308,7 +308,7 @@ def recommended_receipt(job, replay=False):
 def recommended_start_readiness(assessment_id: UUID, recommendation_id: str,
     user: User = Depends(analyst), db: Session = Depends(get_db)):
     from .recommended_test_authorization import preparation, StartUnavailable
-    from .nikto_profile import authority
+    from .nikto_profile import dispatch_enabled
     from .baseline_catalog import fingerprint
     assessment_for(db, assessment_id, user)
     db.scalar(select(Assessment).where(Assessment.id == assessment_id).with_for_update(read=True))
@@ -322,7 +322,12 @@ def recommended_start_readiness(assessment_id: UUID, recommendation_id: str,
         return result
     result.update(snapshot_digest=fingerprint(facts), configured_profile='Web Server Security Checks',
                   endpoint=facts['plan']['endpoint_preview'])
-    if authority()['execution_enabled']:
+    from .recommended_test_queue import RecommendedTestJob
+    existing = db.scalar(select(RecommendedTestJob).where(RecommendedTestJob.assessment_id == assessment_id,
+        RecommendedTestJob.recommendation_id == recommendation_id))
+    if existing is not None:
+        result['reason_code'] = 'recommended_already_requested' if existing.execution_plan == facts['plan'] else 'recommended_existing_policy_stale'
+    elif dispatch_enabled(facts['plan']):
         result.update(ready=True, reason_code='ready')
     return result
 
@@ -342,24 +347,27 @@ def start_recommended_test(assessment_id: UUID, recommendation_id: str, body: Re
     from .recommended_test_authorization import preparation, consent, StartUnavailable
     from .recommended_test_queue import RecommendedTestJob
     from .recommended_test_runner import event
-    from .nikto_profile import authority, PROFILE_ID, VERSION
+    from .nikto_profile import dispatch_enabled, PROFILE_ID
     from .baseline_catalog import fingerprint
     csrf_guard(request, user, db)
     assessment_for(db, assessment_id, user)
-    if not authority()['execution_enabled']:
-        raise HTTPException(503, detail={'code': 'execution_integration_pending'})
     try:
         facts = preparation(db, assessment_id, user.id, recommendation_id)
     except StartUnavailable as exc:
         raise HTTPException(403 if str(exc) == 'recommended_creator_required' else 409,
                             detail={'code': str(exc)}) from None
+    if not dispatch_enabled(facts['plan']):
+        raise HTTPException(503, detail={'code': 'execution_integration_pending'})
     if fingerprint(facts) != body.snapshot_digest:
         raise HTTPException(409, detail={'code': 'recommended_review_stale'})
     existing = db.scalar(select(RecommendedTestJob).where(RecommendedTestJob.assessment_id == assessment_id,
                                                        RecommendedTestJob.recommendation_id == recommendation_id))
-    if existing is not None: return recommended_receipt(existing, True)
+    if existing is not None:
+        if existing.execution_plan != facts['plan']:
+            raise HTTPException(409, detail={'code': 'recommended_existing_policy_stale'})
+        return recommended_receipt(existing, True)
     job = RecommendedTestJob(assessment_id=assessment_id, target_id=UUID(facts['target_id']), actor_id=user.id,
-        recommendation_id=recommendation_id, tool='Nikto', profile_id=PROFILE_ID, profile_version=VERSION,
+        recommendation_id=recommendation_id, tool='Nikto', profile_id=PROFILE_ID, profile_version=facts['plan']['profile_version'],
         scope_revision=facts['scope_revision'], execution_plan=facts['plan'], authorization_snapshot=consent(facts), status='Queued')
     db.add(job); db.flush()
     event(db, job, 'execution_queued', 'explicit_recommended_start')

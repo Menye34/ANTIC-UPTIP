@@ -34,10 +34,13 @@ def accepted(client, db, completed):
 
 @pytest.fixture
 def test_release(monkeypatch):
-    # Synthetic policy only in a verified disposable database. Production v1 is
-    # deliberately disabled; no organizational approval or deployment is created.
-    monkeypatch.setitem(nikto_profile.POLICY, 'execution_enabled', True)
-    monkeypatch.setattr(nikto_profile, '_DIGEST', fingerprint(nikto_profile.POLICY))
+    # Explicit synthetic deployment approval in disposable tests only. Never
+    # mutate disabled historical v1 or its digest to obtain positive coverage.
+    from app.config import get_settings
+    settings=get_settings()
+    monkeypatch.setattr(settings,'nikto_policy_version',2)
+    monkeypatch.setattr(settings,'nikto_policy_digest',nikto_profile.authority(2)['digest'])
+    monkeypatch.setattr(settings,'nikto_policy_approval_reference','disposable-test-approval')
 
 
 def queue(client, db, accepted):
@@ -442,3 +445,53 @@ def test_scope_loss_during_execution_is_observed_and_never_reported_complete(cli
     assert job.status=='Failed' and job.output_partial
     assert not RecommendedTestRunner(BorrowedFactory(db),adapter,boundary=FakeBoundary()).run(job.id)
     assert adapter.calls==1
+
+
+def test_old_v1_queue_is_not_upgraded_or_dispatched_under_v2(client,db,accepted,test_release):
+    path,headers,rec=accepted
+    ready=client.get(path+f"/testing/recommendations/{rec['id']}/start-readiness").json()
+    job=Job(assessment_id=UUID(path.rsplit('/',1)[1]),target_id=UUID(str(rec['target_id'])),
+        actor_id=db.scalar(select(Assessment.creator_id)),recommendation_id=rec['id'],tool='Nikto',
+        profile_id=nikto_profile.PROFILE_ID,profile_version=1,scope_revision=1,
+        execution_plan=nikto_profile.plan(rec['target'],rec['port'],rec['service']),status='Queued')
+    db.add(job);db.flush();original=deepcopy(job.execution_plan)
+    url=path+f"/testing/recommendations/{rec['id']}/start"
+    preview=client.get(url+'-readiness').json()
+    assert not preview['ready'] and preview['reason_code']=='recommended_existing_policy_stale'
+    response=client.post(url,headers=headers,json={'snapshot_digest':ready['snapshot_digest']})
+    assert response.status_code==409
+    adapter=FakeNikto()
+    assert not RecommendedTestRunner(BorrowedFactory(db),adapter,boundary=FakeBoundary()).run(job.id)
+    assert adapter.calls==0 and job.status=='Queued' and job.execution_plan==original
+    assert client.get(url+'-receipt').json()['id']==str(job.id)
+
+
+def test_operator_approval_change_invalidates_review_and_queued_consent(client,db,accepted,test_release,monkeypatch):
+    from app.config import get_settings
+    job,_,_=queue(client,db,accepted)
+    assert job.profile_version==2 and job.authorization_snapshot['dispatch_activation']['version']==2
+    assert fresh_scope_check(db,job)
+    monkeypatch.setattr(get_settings(),'nikto_policy_approval_reference','different-reviewed-release')
+    assert not fresh_scope_check(db,job)
+    adapter=FakeNikto()
+    assert not RecommendedTestRunner(BorrowedFactory(db),adapter,boundary=FakeBoundary()).run(job.id)
+    assert job.status=='Blocked' and adapter.calls==0
+
+
+def test_activated_policy_keeps_tool_port_and_consent_requirements(client,db,accepted,test_release,monkeypatch):
+    path,headers,rec=accepted
+    url=path+f"/testing/recommendations/{rec['id']}/start"
+    ready=client.get(url+'-readiness').json()
+    listing=client.get(path+'/testing/recommendations').json()['recommendations'][0]
+    assert listing['tool_integration_status']=='integrated'
+    assert listing['execution_status']=='requires_start_review' and not listing['execution_available']
+    assert client.get(url.replace('/start','/eligibility')).json()['reason_code']=='explicit_start_required'
+    from app import scope_ports
+    with monkeypatch.context() as check:
+        check.setattr(scope_ports,'authorized_ports',lambda *args:[443] if rec['port']==80 else [80])
+        assert client.get(url+'-readiness').json()['reason_code']=='recommended_port_out_of_scope'
+        assert client.post(url,headers=headers,json={'snapshot_digest':ready['snapshot_digest']}).status_code==409
+    record_tool_state(db,'Nikto','disabled',[])
+    assert client.get(url+'-readiness').json()['reason_code']=='nikto_tool_unavailable'
+    assert client.post(url,headers=headers,json={'snapshot_digest':ready['snapshot_digest']}).status_code==409
+    assert db.scalar(select(func.count()).select_from(Job))==0

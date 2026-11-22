@@ -1,5 +1,10 @@
 # Recommended Nikto execution: guarded integration
 
+For the subsequent, explicitly operator-selected version 2 release, see
+[`nikto-activation.md`](nikto-activation.md). The record below documents the
+original guarded integration and containment correction; default deployment
+still leaves Nikto disabled and historical version 1 is unchanged.
+
 ## Release status
 
 This change connects the existing recommendation API, queue, worker, result

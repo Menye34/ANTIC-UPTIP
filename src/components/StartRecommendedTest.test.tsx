@@ -121,3 +121,16 @@ it('aborts an in-flight POST on unmount and ignores late callbacks', async () =>
   await act(async () => { resolve(json(receipt,202)) })
   expect(started).not.toHaveBeenCalled()
 })
+
+it('validates activated Nikto planning state without granting execution or enabling ZAP', async () => {
+  const { getRecommendations } = await import('../services/testing')
+  const data = intelligentRecommendationData('Accepted')
+  Object.assign(data.recommendations[0], { execution_status: 'requires_start_review',
+    tool_integration_status: 'integrated', execution_unavailability_reason: 'explicit_start_required' })
+  vi.stubGlobal('fetch', vi.fn(async () => json(data)))
+  const result = await getRecommendations(assessmentId, new AbortController().signal)
+  expect(result.recommendations[0].execution_available).toBe(false)
+  expect(result.recommendations[0].review_outcome).toBe('Accepted')
+  data.recommendations[0].suggested_tool = 'OWASP ZAP'
+  await expect(getRecommendations(assessmentId, new AbortController().signal)).rejects.toThrow()
+})

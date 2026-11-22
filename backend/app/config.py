@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     rate_window_seconds: int = Field(default=900, ge=1)
     ip_limit: int = Field(default=30, ge=1)
     username_limit: int = Field(default=10, ge=1)
+    # None leaves Nikto disabled. All three exact values require operator review.
+    nikto_policy_version: int | None = None
+    nikto_policy_digest: str | None = None
+    nikto_policy_approval_reference: str | None = None
     evidence_read_directory: str | None = None
     start_review_key: SecretStr | None = None
     rate_key: str = Field(min_length=32, repr=False)

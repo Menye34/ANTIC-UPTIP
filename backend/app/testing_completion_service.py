@@ -153,7 +153,15 @@ def recommendation_state(db, assessment_id, user):
     source_by_id = {item['observation_id']: item for item in row['sources'] or []}
     outcomes = {event['recommendation_id']: event['outcome'] for event in sorted(
         row['review_events'] or [], key=lambda event: event['revision'])}
+    from .nikto_profile import integration_available
+    nikto_integrated = integration_available()
     for item in items:
+        if nikto_integrated and item.get('suggested_tool') == 'Nikto':
+            item['execution_status'] = 'requires_start_review'
+            item['tool_integration_status'] = 'integrated'
+            item['execution_unavailability_reason'] = 'explicit_start_required'
+            item['explanation'] = [*item['explanation'][:2], 'Nikto is integrated. Execution requires current Start Test readiness and explicit analyst confirmation.']
+            item['reason'] = '\n\n'.join(item['explanation'])
         item['review_outcome'] = outcomes.get(item['id'])
         source = source_by_id.get(item['source_observation_id'])
         item['source_test'] = ({key: source[key] for key in ('test_name', 'tool', 'status', 'execution_id')}

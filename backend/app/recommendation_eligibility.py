@@ -17,8 +17,12 @@ def evaluate_recommendation(recommendation_id, observations):
         return {'eligible': False, 'reason_code': 'recommendation_not_current',
                 'authorization_available': False, 'execution_available': False}
     item = matches[0]
-    # No independently authorized follow-up profile has been implemented.
-    return {'eligible': False, 'reason_code': item['execution_unavailability_reason'],
+    # GET never grants scanner permission. Approved Nikto still requires the
+    # separate creator-confirmed Start Test contract; alternatives remain absent.
+    from .nikto_profile import integration_available
+    reason = ('explicit_start_required' if item.get('suggested_tool') == 'Nikto' and integration_available()
+              else item['execution_unavailability_reason'])
+    return {'eligible': False, 'reason_code': reason,
             'recommendation_id': item['id'],
             'source_observation_id': item['source_observation_id'],
             'source_evidence_id': item['source_evidence_id'],

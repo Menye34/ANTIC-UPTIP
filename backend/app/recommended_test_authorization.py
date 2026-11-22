@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import load_only
 from .baseline_catalog import fingerprint
 from .models import Assessment, AssessmentTarget, User, RecommendationReviewEvent
-from .nikto_profile import plan, authority
+from .nikto_profile import plan, activation
 from .target_scope import classify, scope_entries
 
 
@@ -50,10 +50,12 @@ def preparation(db, assessment_id, actor_id, recommendation_id, *, lock=True):
         raise StartUnavailable('nikto_tool_unavailable')
     from .nikto_network_boundary import rules
     try:
-        candidate = plan(item['target'], item['port'], item['service'])
+        selected = activation()
+        candidate = plan(item['target'], item['port'], item['service'], version=selected['policy']['version'])
         rules(candidate['target'], candidate['port'])
-    except ValueError:
-        raise StartUnavailable('recommended_endpoint_unsupported') from None
+    except ValueError as exc:
+        code = str(exc) if str(exc) in ('nikto_policy_activation_invalid','nikto_profile_integrity_invalid','nikto_policy_version_unsupported') else 'recommended_endpoint_unsupported'
+        raise StartUnavailable(code) from None
     review = db.scalar(select(RecommendationReviewEvent).where(
         RecommendationReviewEvent.assessment_id == assessment_id,
         RecommendationReviewEvent.recommendation_id == recommendation_id)
@@ -67,6 +69,9 @@ def preparation(db, assessment_id, actor_id, recommendation_id, *, lock=True):
              'tool_revision': tool.revision,
              'observation_id': str(item['source_observation_id']), 'evidence_id': str(item['source_evidence_id']),
              'plan': candidate}
+    if selected['policy']['version'] == 2:
+        facts['dispatch_activation'] = {'policy_id': selected['policy']['id'], 'version': 2,
+            'digest': selected['policy']['digest'], 'approval_reference': selected['approval_reference']}
     return facts
 
 

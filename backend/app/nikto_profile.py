@@ -1,11 +1,7 @@
-"""Release-owned Nikto HTTP service profile (pre-dispatch validation only).
-
-This module does not grant authorization or enable worker dispatch. A future
-adapter must enforce the exact endpoint boundary at the network layer before
-this profile can be marked executable.
-"""
+"""Release-owned versioned Nikto profiles; deployment approval is separate consent."""
 from copy import deepcopy
 from ipaddress import IPv4Address
+import re
 
 from .baseline_catalog import fingerprint
 
@@ -30,15 +26,64 @@ POLICY = {
     'execution_enabled': False,
 }
 _DIGEST = fingerprint(POLICY)
+# Never mutate the historical disabled v1 definition or its digest.
+POLICY_V2 = {**deepcopy(POLICY), 'version': 2, 'profile_version': 2,
+    'execution_enabled': True,
+    'scanner_version': '2.6.1',
+    'fixed_arguments': ['-nointeractive', '-nocheck', '-nolookup', '-timeout', '10',
+                        '-maxtime', '300s', '-Tuning', '123b', '-Plugins', 'headers;tests']}
+_DIGEST_V2 = fingerprint(POLICY_V2)
 
 
-def authority():
-    if fingerprint(POLICY) != _DIGEST:
+def authority(version=VERSION):
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError('nikto_policy_version_unsupported')
+    policy, digest = (POLICY, _DIGEST) if version == 1 else (POLICY_V2, _DIGEST_V2)
+    if fingerprint(policy) != digest:
         raise ValueError('nikto_profile_integrity_invalid')
-    return {**deepcopy(POLICY), 'digest': _DIGEST}
+    return {**deepcopy(policy), 'digest': digest}
 
 
-def plan(target, port, scheme):
+def activation():
+    # Only deployment operators can change process configuration. This approval
+    # activates one exact release policy, never an assessment or arbitrary target.
+    from .config import get_settings
+    settings = get_settings()
+    values = (settings.nikto_policy_version, settings.nikto_policy_digest,
+              settings.nikto_policy_approval_reference)
+    if all(value is None for value in values):
+        return {'policy': authority(1), 'approval_reference': None}
+    version, digest, reference = values
+    if (version != 2 or type(version) is not int or not isinstance(reference, str)
+            or not 3 <= len(reference) <= 160 or not reference.isascii()
+            or any(not (c.isalnum() or c in '-_./:') for c in reference)):
+        raise ValueError('nikto_policy_activation_invalid')
+    policy = authority(version)
+    from hmac import compare_digest
+    if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest) or not compare_digest(digest, policy['digest']):
+        raise ValueError('nikto_policy_activation_invalid')
+    return {'policy': policy, 'approval_reference': reference}
+
+
+def integration_available():
+    try:
+        selected = activation()['policy']
+        return selected['version'] == 2 and selected['execution_enabled'] is True
+    except (ValueError, TypeError):
+        return False
+
+
+def dispatch_enabled(candidate):
+    try:
+        selected = activation()['policy']
+        return (selected['execution_enabled'] is True and selected['version'] == 2
+                and validate_plan(candidate) and candidate['profile_version'] == selected['version']
+                and candidate['policy_digest'] == selected['digest'])
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
+def plan(target, port, scheme, *, version=VERSION):
     """Canonical, unambiguous endpoint identity; never an argv or URL grant."""
     if not isinstance(target, str):
         raise ValueError('canonical_ipv4_required')
@@ -52,9 +97,9 @@ def plan(target, port, scheme):
         raise ValueError('valid_tcp_port_required')
     if scheme not in ('http', 'https') or not isinstance(scheme, str):
         raise ValueError('explicit_http_scheme_required')
-    policy = authority()
+    policy = authority(version)
     identity = {'target': target, 'port': port, 'scheme': scheme,
-                'profile_id': PROFILE_ID, 'profile_version': VERSION,
+                'profile_id': PROFILE_ID, 'profile_version': policy['version'],
                 'policy_digest': policy['digest']}
     return {**identity, 'parameter_digest': fingerprint(identity),
             'endpoint_preview': f'{scheme}://{target}:{port}/'}
@@ -64,6 +109,6 @@ def validate_plan(candidate):
     if not isinstance(candidate, dict):
         return False
     try:
-        return candidate == plan(candidate['target'], candidate['port'], candidate['scheme'])
+        return candidate == plan(candidate['target'], candidate['port'], candidate['scheme'], version=candidate['profile_version'])
     except (ValueError, TypeError, KeyError):
         return False

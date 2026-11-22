@@ -63,15 +63,18 @@ def main(argv=None):
     if any(value is not None for value in nikto_values):
         if not all(nikto_values):
             parser.error('Nikto executable, sha256 and version must be configured together')
-        nikto = resolve_adapter('Nikto', 'nikto-http-service-restricted', NiktoConfig(
-            args.nikto_executable, args.nikto_sha256, args.nikto_version))
-        nikto.boundary = boundary
         try:
+            nikto = resolve_adapter('Nikto', 'nikto-http-service-restricted', NiktoConfig(
+                args.nikto_executable, args.nikto_sha256, args.nikto_version))
+            nikto.boundary = boundary
             # Version probing is also disconnected from the host network.
             with boundary.restrict(None, None):
                 nikto.verify()
-            print('uptip_nikto_adapter_verified', flush=True)
-        except AdapterUnavailable:
+            from .nikto_profile import activation
+            selected = activation()['policy']
+            print('uptip_nikto_adapter_verified ' + json.dumps({key: selected[key]
+                for key in ('id','version','digest','execution_enabled')}, sort_keys=True), flush=True)
+        except (AdapterUnavailable, ValueError):
             print('uptip_nikto_unavailable isolation_or_executable_unverified', flush=True)
             nikto = None
     store = EvidenceStore(args.evidence_directory)

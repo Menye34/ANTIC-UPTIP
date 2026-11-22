@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import re
 
 from .nmap_adapter import SupervisedToolAdapter, AdapterUnavailable
-from .nikto_profile import validate_plan
+from .nikto_profile import validate_plan, authority
 
 
 @dataclass(frozen=True)
@@ -53,9 +53,8 @@ class NiktoAdapter(SupervisedToolAdapter):
         # Fixed argv: no free-form URL, shell, proxy, plugin or user-supplied flags.
         # Redirects and DNS lookups are disabled; runtime network isolation must
         # independently enforce the exact authorized IPv4:port endpoint.
-        argv = [self.config.executable, '-host', plan['target'], '-port', str(plan['port']),
-                '-nointeractive', '-nocheck', '-nolookup',
-                '-timeout', '10', '-maxtime', '300s', '-Tuning', '123b', '-Plugins', 'headers;tests']
+        fixed = authority(2)['fixed_arguments']
+        argv = [self.config.executable, '-host', plan['target'], '-port', str(plan['port']), *fixed]
         if plan['scheme'] == 'https':
             argv.append('-ssl')
         return argv
@@ -69,6 +68,6 @@ class NiktoAdapter(SupervisedToolAdapter):
         outcome = self.run(None, safe=lambda: True, launched=lambda _: None,
                            version_probe=True)
         if (outcome.exit_code != 0 or outcome.partial or not outcome.terminated
-                or not re.search(rb'Nikto\s+(?:v|version\s*)' + re.escape(self.config.version.encode()) + rb'\b',
+                or not re.search(rb'Nikto\s+(?:v|version\s+)?' + re.escape(self.config.version.encode()) + rb'\b',
                                  outcome.stdout + b'\n' + outcome.stderr, re.I)):
             raise AdapterUnavailable('unsupported_nikto_version')
