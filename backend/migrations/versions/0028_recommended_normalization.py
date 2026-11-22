@@ -51,6 +51,16 @@ def upgrade():
         sa.CheckConstraint("deduplication_key ~ '^[0-9a-f]{64}$'",name='ck_recommended_observation_key'),
         sa.CheckConstraint("jsonb_typeof(data)='object' AND octet_length(data::text)<=16384",name='ck_recommended_observation_data'))
     op.create_index('ix_recommended_observation_assessment','recommended_observations',['assessment_id','target_id'])
+    # Least-privilege runtime access; processing records are append-only.
+    op.execute("""
+    DO $
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'uptip_runtime') THEN
+        GRANT SELECT, INSERT ON recommended_processing_outcomes TO uptip_runtime;
+        GRANT SELECT, INSERT ON recommended_observations TO uptip_runtime;
+      END IF;
+    END $;
+    """)
 
 
 def downgrade():
