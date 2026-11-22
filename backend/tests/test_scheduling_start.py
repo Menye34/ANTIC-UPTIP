@@ -326,7 +326,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
         from sqlalchemy.engine import make_url
 
         migration_raw = (direct_owner.render_as_string(hide_password=False) if direct_admin else
-                         (os.environ.get("UPTIP_MIGRATION_DATABASE_URL") if ci_admin_url else dotenv_values(".env").get("UPTIP_MIGRATION_DATABASE_URL")))
+                         os.environ.get("UPTIP_MIGRATION_DATABASE_URL", ""))
         if not migration_raw:
             raise RuntimeError("Missing test migration database configuration")
 
