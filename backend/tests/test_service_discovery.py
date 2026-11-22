@@ -332,7 +332,7 @@ def test_service_consent_downgrade_refuses_history_and_concurrent_duplicate(sche
     with pytest.raises(DBAPIError,match='consent history'):command.downgrade(config,'0023')
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(ServiceDiscoveryConsent))==1
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='0025'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='0027'
 
 
 def test_no_capability_or_unauthenticated_session_cannot_grant_service(client,db,prepared):

@@ -36,25 +36,5 @@ def fresh_scope_check(db, job):
     This is a prerequisite for any future dispatcher, not an execution grant.
     The assessment row is locked first so scope updates cannot race this check.
     """
-    from .models import Assessment, AssessmentTarget
-    from .target_scope import classify, scope_entries
-
-    assessment = db.scalar(select(Assessment).where(
-        Assessment.id == job.assessment_id).with_for_update())
-    if assessment is None or assessment.status != 'Testing':
-        return False
-    target = db.scalar(select(AssessmentTarget).where(
-        AssessmentTarget.id == job.target_id,
-        AssessmentTarget.assessment_id == assessment.id).with_for_update())
-    if (target is None or target.kind != 'IP address'
-            or target.scope_status != 'in_scope'
-            or target.scope_revision != assessment.scope_revision
-            or job.scope_revision != assessment.scope_revision
-            or not validate_plan(job.execution_plan)
-            or target.normalized_value != job.execution_plan['target']):
-        return False
-    try:
-        return classify(target.normalized_value, target.kind,
-                        scope_entries(db, assessment.id))[0] == 'in_scope'
-    except (ValueError, TypeError):
-        return False
+    from .recommended_test_authorization import revalidate
+    return revalidate(db, job)

@@ -1,67 +1,128 @@
-"""Single-attempt, fail-closed recommended test runner.
-
-The caller must supply an independently enforced endpoint network boundary.
-This module never grants scope or starts an uncontained scanner.
-"""
+"""Single-attempt recommended execution under a real child network boundary."""
 from contextlib import contextmanager
-from sqlalchemy import select
-
-from .recommended_test_queue import RecommendedTestJob
+from dataclasses import replace
+from datetime import datetime, timezone
+from sqlalchemy import select, text
+from .models import ExecutionAttempt
+from .recommended_test_queue import RecommendedTestJob, RecommendedTestEvent
 from .recommended_test_consumer import dispatch_readiness, fresh_scope_check
 from .recommended_test_results import mark_running, record_outcome
+from .nmap_adapter import AdapterUnavailable
+
+
+def event(db, job, kind, reason):
+    db.add(RecommendedTestEvent(job_id=job.id, assessment_id=job.assessment_id,
+        target_id=job.target_id, event_type=kind, reason_code=reason, occurred_at=datetime.now(timezone.utc)))
+    db.flush()
+
+
+def locked(db, job_id):
+    ids = db.execute(select(RecommendedTestJob.actor_id, RecommendedTestJob.assessment_id)
+                     .where(RecommendedTestJob.id == job_id)).one_or_none()
+    if ids is None: return None
+    db.execute(text('SELECT public.lock_recommended_job_sources(:id)'), {'id': job_id})
+    return db.scalar(select(RecommendedTestJob).where(RecommendedTestJob.id == job_id)
+        .with_for_update().execution_options(populate_existing=True))
 
 
 class RecommendedTestRunner:
     def __init__(self, factory, adapter, *, boundary, stopping=lambda: False):
-        self.factory = factory
-        self.adapter = adapter
-        self.boundary = boundary
-        self.stopping = stopping
+        self.factory, self.adapter, self.boundary, self.stopping = factory, adapter, boundary, stopping
 
     def run(self, job_id):
-        """Claim once; a crash after claim must never silently relaunch a scan."""
-        if self.stopping() or self.boundary is None:
-            return False
-        with self.factory.begin() as db:
-            job = db.scalar(select(RecommendedTestJob).where(
-                RecommendedTestJob.id == job_id).with_for_update())
-            if (job is None or not dispatch_readiness(job, boundary_enforced=self.boundary.enforced)
-                    or not fresh_scope_check(db, job)):
-                return False
+        if self.stopping() or self.boundary is None: return False
+        with self.factory() as db:
+            job = db.get(RecommendedTestJob, job_id)
+            if job is None or not dispatch_readiness(job, boundary_enforced=True): return False
             plan = dict(job.execution_plan)
-            mark_running(job)
-        # No automatic retry: a crash after the claim leaves Running for manual
-        # reconciliation, rather than risking duplicate security scans.
-        def safe():
-            if self.stopping():
-                return False
-            try:
-                with self.factory.begin() as db:
-                    job = db.scalar(select(RecommendedTestJob).where(
-                        RecommendedTestJob.id == job_id).with_for_update())
-                    return (job is not None and job.status == 'Running'
-                            and job.execution_plan == plan and fresh_scope_check(db, job)
-                            and self.boundary.enforced)
-            except Exception:
-                return False
-
+        claimed = False
+        launched = False
         try:
+            # The context establishes namespaces and firewall before any scanner.
+            # The adapter independently requires and enters these pinned namespaces.
             with self.boundary.restrict(plan['target'], plan['port']):
-                if not safe():
-                    raise RuntimeError('recommended_scope_or_boundary_lost')
-                outcome = self.adapter.run(plan, safe=safe, launched=lambda _: None)
-        except Exception:
+                with self.factory.begin() as db:
+                    db.execute(text('SELECT pg_advisory_xact_lock(873248902)'))
+                    if db.scalar(select(ExecutionAttempt.id).where(ExecutionAttempt.status.in_(('Claimed','Running','RecoveryRequired'))).limit(1)):
+                        return False
+                    if db.scalar(select(RecommendedTestJob.id).where(RecommendedTestJob.status == 'Running').limit(1)):
+                        return False
+                    job = locked(db, job_id)
+                    if job is None or job.status != 'Queued' or self.stopping():
+                        return False
+                    if (not dispatch_readiness(job, boundary_enforced=self.boundary.enforced)
+                            or job.execution_plan != plan or not fresh_scope_check(db, job)):
+                        job.status = 'Blocked'
+                        job.failure_reason = 'recommended_authorization_unverified'
+                        event(db, job, 'dispatch_blocked', job.failure_reason)
+                        return False
+                    mark_running(job)
+                    event(db, job, 'execution_claimed', 'recommended_dispatch_verified')
+                claimed = True
+
+                launch_db = None
+
+                def checked(db):
+                    job = locked(db, job_id)
+                    if (self.stopping() or not self.boundary.enforced or not job or job.status != 'Running'
+                            or job.execution_plan != plan or not fresh_scope_check(db, job)):
+                        raise AdapterUnavailable('recommended_prelaunch_authorization_lost')
+                    return job
+
+                @contextmanager
+                def guard():
+                    nonlocal launch_db
+                    with self.factory.begin() as db:
+                        launch_db = db
+                        try:
+                            checked(db)
+                            # Keep parent/input locks through Popen and identity recording.
+                            yield
+                        finally:
+                            launch_db = None
+
+                def safe():
+                    try:
+                        if launch_db is not None:
+                            checked(launch_db)
+                        else:
+                            with self.factory.begin() as db: checked(db)
+                        return True
+                    except Exception:
+                        return False
+
+                def started(identity):
+                    nonlocal launched
+                    launched = True
+                    if launch_db is None: raise AdapterUnavailable('recommended_launch_guard_required')
+                    job = checked(launch_db)
+                    job.process_reference = identity
+                    event(launch_db, job, 'scanner_started', 'recommended_dispatch_verified')
+
+                if not safe(): raise AdapterUnavailable('recommended_prelaunch_authorization_lost')
+                outcome = self.adapter.run(plan, safe=safe, launched=started, launch_guard=guard)
+                if not safe(): outcome = replace(outcome, partial=True, reason='final_safety_unverified')
             with self.factory.begin() as db:
-                job = db.scalar(select(RecommendedTestJob).where(
-                    RecommendedTestJob.id == job_id).with_for_update())
-                if job is not None and job.status == 'Running':
-                    job.status = 'Failed'
-                    job.failure_reason = 'executor_unavailable_or_boundary_lost'
+                job = locked(db, job_id)
+                if job is None or job.status != 'Running': return False
+                record_outcome(job, outcome)
+                event(db, job, 'execution_finished' if outcome.terminated else 'recovery_required',
+                      job.failure_reason or 'scanner_output_recorded')
+            return True
+        except Exception as exc:
+            if claimed:
+                with self.factory.begin() as db:
+                    job = locked(db, job_id)
+                    if job and job.status == 'Running':
+                        # Unknown postlaunch outcomes block both queues after restart.
+                        job.failure_reason = 'launch_or_termination_unverified' if launched else 'executor_unavailable_or_boundary_lost'
+                        if not launched: job.status = 'Blocked'
+                        event(db, job, 'recovery_required' if launched else 'dispatch_blocked', job.failure_reason)
+            elif isinstance(exc, AdapterUnavailable):
+                with self.factory.begin() as db:
+                    job = locked(db, job_id)
+                    if job and job.status == 'Queued':
+                        job.status = 'Blocked'
+                        job.failure_reason = 'network_boundary_unavailable'
+                        event(db, job, 'dispatch_blocked', job.failure_reason)
             return False
-        with self.factory.begin() as db:
-            job = db.scalar(select(RecommendedTestJob).where(
-                RecommendedTestJob.id == job_id).with_for_update())
-            if job is None or job.status != 'Running':
-                return False
-            record_outcome(job, outcome)
-        return True

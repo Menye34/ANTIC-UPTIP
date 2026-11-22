@@ -167,7 +167,7 @@ def test_scope_port_history_refuses_downgrade(scheduling_concurrency, monkeypatc
     with pytest.raises(DBAPIError, match='authorized TCP port history'):
         command.downgrade(config, '0024')
     with factory() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '0025'
+        assert db.scalar(text('SELECT version_num FROM alembic_version')) == '0027'
 
 
 def test_scoped_service_respects_runtime_tool_revocation(client, db, prepared, tmp_path):

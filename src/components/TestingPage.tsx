@@ -203,6 +203,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
   const [recommendationRetry, setRecommendationRetry] = useState(0)
   const [reviewedRecommendation, setReviewedRecommendation] = useState<string>()
   const [startRecommendation, setStartRecommendation] = useState<string>()
+  const [recommendedOperations, setRecommendedOperations] = useState<Record<string, 'idle' | 'uncertain' | 'confirmed'>>({})
   const recommendationGeneration = useRef(0)
   const [completionOperation, setCompletionOperation] = useState<CompletionOperation>({ phase: 'idle' })
 
@@ -321,7 +322,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
 
               {item.kind === 'evidence_followup' && item.decision === 'Reviewed' && item.review_outcome === 'Accepted' ?
                 <button type="button" className="analyst-create testing-review-action" disabled={!!recommendationError} onClick={event => { event.currentTarget.focus(); setStartRecommendation(item.id) }}>Start Test</button> :
-                item.decision === null ? <button type="button" className="analyst-create testing-review-action" onClick={event => { event.currentTarget.focus(); setReviewedRecommendation(item.id) }}>Review Recommendation</button> : null}
+                <button type="button" className="analyst-create testing-review-action" onClick={event => { event.currentTarget.focus(); setReviewedRecommendation(item.id) }}>Review Recommendation</button>}
             </article>)}
           </div>}
         </section>
@@ -386,7 +387,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
       recommendation={recommendations.recommendations.find(item => item.id === reviewedRecommendation)!}
       onClose={() => setReviewedRecommendation(undefined)} />}
     {startRecommendation && !recommendationError && recommendations?.recommendations.some(item => item.id === startRecommendation && item.decision === 'Reviewed' && item.review_outcome === 'Accepted') &&
-      <StartRecommendedTest assessmentId={assessmentId} csrfToken={csrfToken} onExpired={onExpired} onStarted={() => { setRetry(n => n + 1); invalidateRecommendations(); setActiveTab('activity') }} recommendation={recommendations.recommendations.find(item => item.id === startRecommendation)!}
+      <StartRecommendedTest operation={recommendedOperations[startRecommendation] ?? 'idle'} onOperationChange={phase => setRecommendedOperations(previous => ({ ...previous, [startRecommendation]: phase }))} assessmentId={assessmentId} csrfToken={csrfToken} onExpired={onExpired} onStarted={() => { setRetry(n => n + 1); invalidateRecommendations(); setActiveTab('activity') }} recommendation={recommendations.recommendations.find(item => item.id === startRecommendation)!}
         onClose={() => setStartRecommendation(undefined)} />}
     {selected && <Details key={assessmentId + ':' + selected} assessmentId={assessmentId} executionId={selected} onExpired={onExpired}
       onClose={() => { setSelected(undefined); detailButton.current?.focus() }} />}

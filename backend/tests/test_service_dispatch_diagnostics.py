@@ -128,7 +128,7 @@ def test_diagnostics_command_needs_neither_database_nor_executable(monkeypatch, 
     def forbidden(*args, **kwargs): raise AssertionError('Diagnostic attempted operational access')
     monkeypatch.setattr(execution_worker, 'get_settings', forbidden)
     monkeypatch.setattr(execution_worker, 'create_engine', forbidden)
-    monkeypatch.setattr(execution_worker, 'NmapAdapter', forbidden)
+    monkeypatch.setattr(execution_worker, 'resolve_adapter', forbidden)
     execution_worker.main(['--diagnostics'])
     value = json.loads(capsys.readouterr().out)
     assert value == diagnostics()

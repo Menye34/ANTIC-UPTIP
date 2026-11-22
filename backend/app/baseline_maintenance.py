@@ -16,6 +16,8 @@ def record_tool_state(db, tool, state, capabilities):
     if tool == 'Nmap':
         from .nmap_service_profile import CAPABILITY
         allowed.add(CAPABILITY)
+    elif tool == 'Nikto':
+        allowed.add('http-server-assessment')
     if not allowed or state not in TOOL_STATES or not set(capabilities) <= allowed:
         raise ValueError('Unsupported tool state or capability.')
     table = BaselineToolState.__table__
@@ -43,7 +45,7 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('reconcile', help='Reconcile existing targets or a deployed catalog change')
     tool = commands.add_parser('tool-state', help='Record trusted operator-attested tool state and reconcile')
-    tool.add_argument('tool', choices=sorted({profile.tool for profile in PROFILES}))
+    tool.add_argument('tool', choices=sorted({profile.tool for profile in PROFILES} | {'Nikto'}))
     tool.add_argument('state', choices=TOOL_STATES)
     tool.add_argument('--capability', action='append', default=[])
     args = parser.parse_args()

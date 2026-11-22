@@ -19,8 +19,11 @@ from .nmap_adapter import AdapterConfig
 from .nikto_adapter import NiktoConfig
 from .tool_adapter_registry import resolve_adapter
 from .worker_diagnostics import diagnostics
-from .recommended_test_consumer import pending_ids, dispatch_readiness
+from .recommended_test_consumer import pending_ids
 from .recommended_test_queue import RecommendedTestJob
+from .recommended_test_runner import RecommendedTestRunner
+from .nikto_network_boundary import NamespaceBoundary
+from .nmap_adapter import AdapterUnavailable
 
 
 def main(argv=None):
@@ -55,13 +58,22 @@ def main(argv=None):
     # Optional Nikto readiness probe. All three settings must be supplied
     # together; this never grants dispatch authorization or starts a scan.
     nikto_values = (args.nikto_executable, args.nikto_sha256, args.nikto_version)
+    nikto = None
+    boundary = NamespaceBoundary()
     if any(value is not None for value in nikto_values):
         if not all(nikto_values):
             parser.error('Nikto executable, sha256 and version must be configured together')
         nikto = resolve_adapter('Nikto', 'nikto-http-service-restricted', NiktoConfig(
             args.nikto_executable, args.nikto_sha256, args.nikto_version))
-        nikto.verify()  # Version probe only, no target or scan.
-        print('uptip_nikto_adapter_verified', flush=True)
+        nikto.boundary = boundary
+        try:
+            # Version probing is also disconnected from the host network.
+            with boundary.restrict(None, None):
+                nikto.verify()
+            print('uptip_nikto_adapter_verified', flush=True)
+        except AdapterUnavailable:
+            print('uptip_nikto_unavailable isolation_or_executable_unverified', flush=True)
+            nikto = None
     store = EvidenceStore(args.evidence_directory)
     adapter.verify()  # Version only; no target or scan.
     stopped = False
@@ -89,7 +101,8 @@ def main(argv=None):
             raise RuntimeError('Worker role must not have schema or database creation privileges.')
         for table in ('assessments', 'users', 'assessment_start_authorizations', 'execution_attempts',
                       'scanner_evidence', 'execution_events', 'security_observations', 'result_processing_outcomes',
-                      'service_discovery_consents', 'service_discovery_revocations'):
+                      'service_discovery_consents', 'service_discovery_revocations',
+                      'recommended_test_jobs', 'recommended_test_events'):
             unsafe = ownership.scalar(text("""
                 SELECT pg_has_role(current_user, c.relowner, 'MEMBER')
                     OR has_table_privilege(current_user, c.oid, 'DELETE,TRUNCATE,TRIGGER')
@@ -109,9 +122,17 @@ def main(argv=None):
             except Exception:
                 return True
         runner = ExecutionRunner(factory, adapter, store, worker_id, unhealthy)
+        recommended_runner = RecommendedTestRunner(factory, nikto, boundary=boundary, stopping=unhealthy) if nikto else None
         while not stopped:
             ownership.execute(text('SELECT 1'))
             recover_expired(factory)
+            # An uncertain Nikto process is not made safe by restarting a worker.
+            with factory() as db:
+                uncertain = db.scalar(select(RecommendedTestJob.id).where(RecommendedTestJob.status == 'Running').limit(1))
+            if uncertain:
+                if args.once: break
+                time.sleep(1)
+                continue
             with factory() as db:
                 ids = db.scalars(select(BaselineExecutionRequest.id)
                     .where(BaselineExecutionRequest.status == 'Queued')
@@ -120,15 +141,11 @@ def main(argv=None):
                 if stopped:
                     break
                 runner.run(request_id)
-            # Dedicated recommendation queue; never inherits the Nmap grant.
-            # The release profile currently disables Nikto execution until
-            # exact-endpoint network isolation and worker revalidation exist.
-            with factory() as db:
-                recommended_ids = pending_ids(db)
+            if recommended_runner:
+                with factory() as db: recommended_ids = pending_ids(db)
                 for recommended_id in recommended_ids:
-                    job = db.get(RecommendedTestJob, recommended_id)
-                    if job is not None and dispatch_readiness(job, boundary_enforced=False):
-                        raise RuntimeError('Recommended execution dispatcher is not configured')
+                    if unhealthy(): break
+                    recommended_runner.run(recommended_id)
             if args.once:
                 break
             for _ in range(20):

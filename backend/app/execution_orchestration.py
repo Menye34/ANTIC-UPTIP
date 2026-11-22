@@ -69,6 +69,9 @@ def claim(factory, request_id, worker_id, timeout):
         request = locked(db, request_id)
         if request.status != 'Queued':
             return None
+        from .recommended_test_queue import RecommendedTestJob
+        if db.scalar(select(RecommendedTestJob.id).where(RecommendedTestJob.status == 'Running').limit(1)):
+            return None
         if db.scalar(select(ExecutionAttempt.id).where(
                 ExecutionAttempt.status.in_(('Claimed', 'Running', 'RecoveryRequired'))).limit(1)):
             return None

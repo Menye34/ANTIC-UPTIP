@@ -67,11 +67,13 @@ def load_state(db, assessment_id, user):
         .where(TestingCompletionEvent.assessment_id == Assessment.id).correlate(Assessment)
         .scalar_subquery().label('receipt'),
     ).where(Assessment.id == assessment_id, accessible(user))
+    from .recommended_test_queue import RecommendedTestJob
+    query = query.add_columns(aggregate(RecommendedTestJob, ('id','target_id','profile_id','profile_version','status')).label('recommended'))
     row = db.execute(query).mappings().one_or_none()
     if row is None:
         raise HTTPException(404)
     return CompletionState(str(row['id']), row['name'], row['status'], str(row['creator_id']),
-                           row['scope_revision'], row['executions'] or [], row['attempts'] or [],
+                           row['scope_revision'], (row['executions'] or []) + (row['recommended'] or []), row['attempts'] or [],
                            row['processing'] or [], row['observations'] or [], row['decisions'] or [], row['receipt'], row['review_events'] or [])
 
 
@@ -81,7 +83,12 @@ def lock_inputs(db, assessment_id):
     Existing worker writers use that parent lock. Do not lock decisions after
     the parent: their update trigger already coordinates through the parent.
     """
-    for model in (BaselineExecutionRequest, ExecutionAttempt, ResultProcessingOutcome, SecurityObservation):
+    from .recommended_test_queue import RecommendedTestJob
+    for model in (BaselineExecutionRequest, RecommendedTestJob, ExecutionAttempt, ResultProcessingOutcome, SecurityObservation):
+        if model is RecommendedTestJob:
+            from sqlalchemy import text
+            db.execute(text('SELECT public.lock_recommended_assessment_jobs(:id)'), {'id': assessment_id})
+            continue
         db.execute(select(model.id).where(model.assessment_id == assessment_id)
                    .order_by(model.id).with_for_update()).all()
 

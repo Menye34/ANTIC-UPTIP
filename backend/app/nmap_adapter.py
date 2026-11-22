@@ -122,6 +122,10 @@ class SupervisedToolAdapter:
         return {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
                 'HOME': '/nonexistent', 'NMAP_UNPRIVILEGED': '1'}
 
+    def launch_context(self, plan, version_probe):
+        """Trusted adapter hook; Nmap retains its existing launch behavior."""
+        return (), _no_new_privileges
+
     def run(self, plan, *, safe, launched, version_probe=False, launch_guard=nullcontext):
         if not version_probe and not self.validate_execution_plan(plan):
             raise AdapterUnavailable('unsupported_invocation')
@@ -135,13 +139,14 @@ class SupervisedToolAdapter:
         terminated = True
         try:
             argv = self.command(plan, version_probe)
+            extra_fds, prepare_child = self.launch_context(plan, version_probe)
             with launch_guard():
                 if not safe():
                     raise AdapterUnavailable('prelaunch_authorization_denied')
-                process = subprocess.Popen(argv, executable=f'/proc/self/fd/{fd}', pass_fds=(fd,),
+                process = subprocess.Popen(argv, executable=f'/proc/self/fd/{fd}', pass_fds=(fd, *extra_fds),
                     shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     env=self.environment(), cwd='/', start_new_session=True,
-                    preexec_fn=_no_new_privileges)
+                    preexec_fn=prepare_child)
                 launched(process_identity(process.pid))
             deadline = time.monotonic() + (5 if version_probe else self.config.timeout)
             check_at = time.monotonic()

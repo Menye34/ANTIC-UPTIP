@@ -22,7 +22,7 @@ class NiktoConfig:
     def __post_init__(self):
         if (not isinstance(self.executable, str) or not self.executable.startswith('/')
                 or not re.fullmatch(r'[a-f0-9]{64}', self.sha256)
-                or not re.fullmatch(r'2\.[0-9]+\.[0-9]+', self.version)
+                or self.version != '2.6.1'
                 or type(self.timeout) is not int or not 1 <= self.timeout <= 300
                 or type(self.output_limit) is not int or not 1 <= self.output_limit <= 5 * 1024 * 1024
                 or not isinstance(self.safety_interval, (int, float))
@@ -32,6 +32,15 @@ class NiktoConfig:
 
 class NiktoAdapter(SupervisedToolAdapter):
     """Reuse process identity, privileges, pinning, supervision and termination."""
+
+    def __init__(self, config, *, boundary=None):
+        super().__init__(config)
+        self.boundary = boundary
+
+    def launch_context(self, plan, version_probe):
+        if self.boundary is None:
+            raise AdapterUnavailable('nikto_network_boundary_required')
+        return self.boundary.launch_context(None if version_probe else plan)
 
     def validate_execution_plan(self, plan):
         return validate_plan(plan)
@@ -45,8 +54,8 @@ class NiktoAdapter(SupervisedToolAdapter):
         # Redirects and DNS lookups are disabled; runtime network isolation must
         # independently enforce the exact authorized IPv4:port endpoint.
         argv = [self.config.executable, '-host', plan['target'], '-port', str(plan['port']),
-                '-nointeractive', '-noupdate', '-nolookup', '-noredirect',
-                '-timeout', '10s', '-maxtime', '300s']
+                '-nointeractive', '-nocheck', '-nolookup',
+                '-timeout', '10', '-maxtime', '300s', '-Tuning', '123b', '-Plugins', 'headers;tests']
         if plan['scheme'] == 'https':
             argv.append('-ssl')
         return argv

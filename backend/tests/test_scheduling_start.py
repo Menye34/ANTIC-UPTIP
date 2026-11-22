@@ -563,7 +563,7 @@ def test_draft_survives_migration_cycle_and_testing_prevents_downgrade(schedulin
     with pytest.raises(DBAPIError,match='Cannot downgrade'):
         command.downgrade(config,'0011')
     with factory() as db:
-        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='0025'
+        assert db.scalar(text('SELECT version_num FROM alembic_version'))=='0027'
         assert db.scalar(select(Assessment.status))=='Testing'
         for model in (AssessmentStartAuthorization,AssessmentStartEvent,BaselineExecutionRequest):
             assert db.scalar(select(func.count()).select_from(model))==1

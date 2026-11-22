@@ -1,4 +1,4 @@
-import { startRequest } from './assessmentStart'
+import { AssessmentStartError, startRequest } from './assessmentStart'
 
 export const executionStates = ['Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled'] as const
 export type ExecutionStatus = typeof executionStates[number]
@@ -11,7 +11,8 @@ export interface Execution {
   tool: string
   target: string
   status: ExecutionStatus
-  authorization_id: string
+  authorization_id: string | null
+  execution_kind?: 'recommended'
   created_at: string
   updated_at: string
   execution_authorized: false
@@ -40,6 +41,7 @@ export interface TestingData {
 }
 export interface ExecutionDetails extends Execution {
   dispatch_status: string
+  recommended_result?: { termination_verified: boolean; partial: boolean; integrity_verified: boolean; failure_reason: string | null }
   dispatch_history?: { id: string; event: string; reason_code: string; occurred_at: string; attempt_id: string | null } | null
   attempts: Array<{ id: string; attempt_number: number; status: string; reason_code: string | null; started_at: string | null; finished_at: string | null; exit_code: number | null; recovery_reason: string | null }>
   evidence: Array<{ id: string; format: string; size_bytes: number; partial: boolean; collected_at: string; sha256: string }>
@@ -89,7 +91,12 @@ export async function getExecutionDetails(assessmentId: string, executionId: str
       || !Array.isArray(result.evidence) || !Array.isArray(result.processing) || !Array.isArray(result.observations)
       || !Array.isArray(result.events)) throw new Error('Invalid execution details')
   const nullableText = (value: unknown) => value === null || typeof value === 'string'
-  if (typeof result.dispatch_status !== 'string'
+  if ((result.execution_kind === 'recommended' && (!result.recommended_result
+      || typeof result.recommended_result.termination_verified !== 'boolean'
+      || typeof result.recommended_result.partial !== 'boolean'
+      || typeof result.recommended_result.integrity_verified !== 'boolean'
+      || !nullableText(result.recommended_result.failure_reason)))
+    || typeof result.dispatch_status !== 'string'
     || (result.dispatch_history != null && (typeof result.dispatch_history.id !== 'string'
       || !['dispatch_blocked', 'execution_claimed', 'scanner_started'].includes(result.dispatch_history.event)
       || result.dispatch_history.event !== result.dispatch_status
@@ -238,24 +245,57 @@ export async function getOriginalEvidence(assessmentId: string, executionId: str
   return value
 }
 
-/** The T-04D action submits no target, port or command-line overrides. */
+export interface RecommendedReceipt {
+  id: string; assessment_id: string; recommendation_id: string; status: ExecutionStatus;
+  tool: string; already_requested: boolean; execution_authorized: false
+}
+function validRecommendedReceipt(value: RecommendedReceipt, assessmentId: string, recommendationId: string) {
+  return value && typeof value.id === 'string' && value.assessment_id === assessmentId
+    && value.recommendation_id === recommendationId && value.tool === 'Nikto'
+    && executionStates.includes(value.status) && typeof value.already_requested === 'boolean'
+    && value.execution_authorized === false
+}
+export async function getRecommendedReceipt(assessmentId: string, recommendationId: string, signal: AbortSignal) {
+  const value = await startRequest<RecommendedReceipt>(assessmentId,
+    '/testing/recommendations/' + encodeURIComponent(recommendationId) + '/start-receipt', signal)
+  if (!validRecommendedReceipt(value, assessmentId, recommendationId)) throw new Error('Invalid recommended-test start receipt')
+  return value
+}
+export class RecommendedStartUncertainError extends Error {
+  constructor() { super('Test scheduling outcome remains unverified. Check saved status; do not submit again.') }
+}
+/** Only the reviewed digest is sent; target/port/argv are server-derived. */
 export async function startRecommendedTest(assessmentId: string, recommendationId: string,
-  csrfToken: string, signal: AbortSignal) {
-  const receipt = await startRequest<{ id: string; status: ExecutionStatus; tool: string; already_requested: boolean }>(
-    assessmentId, '/testing/recommendations/' + encodeURIComponent(recommendationId) + '/start', signal,
-    { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } })
-  if (!receipt || typeof receipt.id !== 'string' || receipt.tool !== 'Nikto'
-    || !executionStates.includes(receipt.status) || typeof receipt.already_requested !== 'boolean') {
-    throw new Error('Invalid recommended-test start receipt')
+  csrfToken: string, signal: AbortSignal, snapshotDigest: string) {
+  if (!/^[a-f0-9]{64}$/.test(snapshotDigest)) throw new Error('Invalid reviewed test digest')
+  try {
+    const value = await startRequest<RecommendedReceipt>(assessmentId,
+      '/testing/recommendations/' + encodeURIComponent(recommendationId) + '/start', signal,
+      { method: 'POST', headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snapshot_digest: snapshotDigest }) })
+    if (!validRecommendedReceipt(value, assessmentId, recommendationId)) throw new Error('Invalid recommended-test start receipt')
+    return value
+  } catch (error) {
+    if (signal.aborted) throw error
+    if (error instanceof AssessmentStartError && error.status < 500 && ![408,429].includes(error.status)) throw error
+    try { return await getRecommendedReceipt(assessmentId, recommendationId, signal) }
+    catch { throw new RecommendedStartUncertainError() }
   }
-  return receipt
 }
 
+export interface RecommendedReadiness {
+  assessment_id: string; recommendation_id: string; ready: boolean; reason_code: string;
+  snapshot_digest: string | null; configured_profile: string | null; endpoint: string | null
+}
 export async function getRecommendedStartReadiness(assessmentId: string, recommendationId: string, signal: AbortSignal) {
-  const result = await startRequest<{assessment_id: string; recommendation_id: string; ready: boolean; reason_code: string}>(
-    assessmentId, '/testing/recommendations/' + encodeURIComponent(recommendationId) + '/start-readiness', signal)
+  const result = await startRequest<RecommendedReadiness>(assessmentId,
+    '/testing/recommendations/' + encodeURIComponent(recommendationId) + '/start-readiness', signal)
+  const nullableText = (value: unknown) => value === null || typeof value === 'string'
   if (result.assessment_id !== assessmentId || result.recommendation_id !== recommendationId
-    || typeof result.ready !== 'boolean' || typeof result.reason_code !== 'string') {
+    || typeof result.ready !== 'boolean' || typeof result.reason_code !== 'string'
+    || !nullableText(result.configured_profile) || !nullableText(result.endpoint)
+    || !(result.snapshot_digest === null || typeof result.snapshot_digest === 'string' && /^[a-f0-9]{64}$/.test(result.snapshot_digest))
+    || result.ready && (!result.snapshot_digest || !result.configured_profile || !result.endpoint)) {
     throw new Error('Invalid Start Test readiness response')
   }
   return result

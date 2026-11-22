@@ -36,7 +36,13 @@ def record_outcome(job, outcome, *, now=None):
     job.stdout = stdout
     job.stderr = stderr
     job.output_digest = sha256(stdout + b'\x00' + stderr).hexdigest()
+    job.termination_verified = outcome.terminated is True
+    job.output_partial = outcome.partial is True
     job.exit_code = outcome.exit_code
+    if not outcome.terminated:
+        # Running means unresolved ownership here, never proof of termination.
+        job.failure_reason = 'termination_unverified'
+        return job.status
     job.finished_at = now or datetime.now(timezone.utc)
     success = outcome.exit_code == 0 and outcome.reason == 'scanner_exited' and outcome.terminated and not outcome.partial
     job.status = 'Completed' if success else 'Failed'

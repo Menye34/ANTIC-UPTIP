@@ -6,6 +6,8 @@ import type { ExecutionDetails, OriginalEvidence } from '../services/testing'
 function time(value: string | null) { return value ? new Date(value).toLocaleString() : 'Not recorded' }
 function detailsNeedRefresh(data: ExecutionDetails) {
   if (['Queued', 'Running'].includes(data.status)) return true
+  if (data.execution_kind === 'recommended') return data.status !== 'Blocked'
+    && (!data.recommended_result?.termination_verified || !data.recommended_result.integrity_verified)
   if (data.attempts.some(a => !['Succeeded', 'Failed', 'Stopped', 'Blocked', 'Cancelled'].includes(a.status))) return true
   if (data.processing.some(p => !['Succeeded', 'Failed', 'Interrupted'].includes(p.status))) return true
   if (data.status === 'Completed') return !data.attempts.length || !data.processing.length
@@ -126,7 +128,7 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
       {!data && !error ? <p role="status">Loading execution details…</p> : data && <>
         <section className="testing-detail-summary"><h3>{data.test_name}</h3><span className="testing-state" data-status={data.status}>{data.status}</span>
           <p>Tool: {data.tool}</p><p>Target: {data.target}</p></section>
-        <p className="testing-detail-status" role="status">{!['Queued', 'Running'].includes(data.status) && detailsNeedRefresh(data) ? 'Execution details are incomplete or uncertain; completion cannot be verified from this snapshot.' : data.status === 'Completed' ? 'The test completed. Review the recorded ports, services and original evidence.'
+        <p className="testing-detail-status" role="status">{!['Queued', 'Running'].includes(data.status) && detailsNeedRefresh(data) ? 'Execution details are incomplete or uncertain; completion cannot be verified from this snapshot.' : data.status === 'Completed' ? (data.execution_kind === 'recommended' ? 'The scanner completed. Review its original output; normalized findings are not yet available.' : 'The test completed. Review the recorded ports, services and original evidence.')
           : data.status === 'Queued' ? 'This test is queued and has not started.' : `Execution status: ${data.status}. Results may be incomplete.`}</p>
         {data.dispatch_history && <section className="testing-detail-section" aria-label="Recorded dispatch outcome">
           <h3>Recorded Dispatch Outcome</h3>
@@ -134,12 +136,13 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
           <p>{data.dispatch_history.event === 'dispatch_blocked' ? 'Blocking reason' : 'Recorded reason'}: {data.dispatch_history.reason_code}</p>
           <p>This is recorded history, not permission for a future execution.</p>
         </section>}
-        {data.status === 'Failed' && <section aria-label="Failure information"><h3>Failure Information</h3><p>{data.attempts.at(-1)?.reason_code ?? 'Not recorded'}</p></section>}
+        {data.status === 'Failed' && <section aria-label="Failure information"><h3>Failure Information</h3><p>{data.recommended_result?.failure_reason ?? data.attempts.at(-1)?.reason_code ?? 'Not recorded'}</p></section>}
         <section className="testing-detail-section" aria-label="Test results"><h3>Test Results</h3>
+          {data.execution_kind === 'recommended' && <p>No normalized findings are asserted by this execution record. Original output is available below only when recorded and integrity-checked.</p>}
           {services.length ? <><p>{services.length} recorded open TCP services{services.some(o => o.partial) && ' (includes partial results)'}.</p>
             <table aria-label="Discovered ports and services"><thead><tr><th>Port</th><th>Service</th><th>Version</th></tr></thead><tbody>{services.map(o =>
               <tr key={o.id}><td>{String(o.data.port)}/tcp{o.partial && ' · Partial'}</td><td>{String(o.data.service).toUpperCase()}</td><td>{typeof o.data.version === 'string' ? o.data.version : 'Not identified'}</td></tr>)}</tbody></table></>
-            : <p>No identified open services recorded. Host reachability alone does not identify services.</p>}
+            : data.execution_kind !== 'recommended' && <p>No identified open services recorded. Host reachability alone does not identify services.</p>}
           {data.observations.filter(o => o.type !== 'service_discovery').map(o => <p key={o.id}>{o.type === 'host_discovery'
             ? `${String(o.data.address ?? data.target)} · ${String(o.data.status ?? 'unknown')}` : o.type}{o.partial && ' · Partial result'}</p>)}
         </section>
@@ -148,7 +151,7 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
           <dl className="testing-metadata"><div><dt>Execution ID</dt><dd>{data.id}</dd></div><div><dt>Profile</dt><dd>{data.profile_id} v{data.profile_version}</dd></div>
             <div><dt>Recorded dispatch status</dt><dd>{data.dispatch_status.replace(/_/g, ' ')}</dd></div></dl>
           <h3>Execution attempts</h3>{data.attempts.map(a => <p key={a.id}>Attempt {a.attempt_number}: {a.status} · {time(a.started_at)} · {time(a.finished_at)} {a.reason_code} {a.recovery_reason}</p>)}
-          {!data.attempts.length && <p>No execution attempt recorded. Queued does not mean Running.</p>}
+          {!data.attempts.length && <p>{data.execution_kind === 'recommended' ? 'Recommended-test execution history is recorded in the timeline below.' : 'No execution attempt recorded. Queued does not mean Running.'}</p>}
           <h3>Result processing</h3>{data.processing.map(p => <p key={p.id}>{p.status} · {p.observation_count} observations {p.partial && '· Partial'} {p.error_code}</p>)}
           <h3>Execution timeline</h3>{data.events.map(e => <p key={e.id}>{e.event.replace(/_/g, ' ')} · {time(e.occurred_at)} · {e.reason_code}</p>)}
         </details>

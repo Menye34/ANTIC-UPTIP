@@ -103,9 +103,10 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
         ResultProcessingOutcome.is_partial.is_(False), BaselineExecutionRequest.status == 'Completed',
         BaselineExecutionRequest.profile_id == 'service-discovery', ScannerEvidence.is_partial.is_(False),
         ExecutionAttempt.status == 'Succeeded').correlate(Assessment).exists())
+    from .recommended_testing_reads import overview_jobs, overview_events, execution_view as recommended_view
     rows = db.execute(
         select(Assessment, AssessmentStartAuthorization, BaselineExecutionRequest, discoveries, activity,
-               boundaries, actor, trusted, service_processed)
+               boundaries, actor, trusted, service_processed, overview_jobs(), overview_events())
         .outerjoin(AssessmentStartAuthorization,
                    AssessmentStartAuthorization.assessment_id == Assessment.id)
         .outerjoin(BaselineExecutionRequest, BaselineExecutionRequest.assessment_id == Assessment.id)
@@ -115,9 +116,11 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
     ).all()
     if not rows:
         raise HTTPException(404)
-    assessment, authorization, _, observations, event_activity, boundary_rows, actor_name, verified, processed = rows[0]
+    assessment, authorization, _, observations, event_activity, boundary_rows, actor_name, verified, processed, recommended, recommended_events = rows[0]
+    event_activity = (event_activity or []) + (recommended_events or [])
     requests = [row[2] for row in rows if row[2] is not None]
-    counts = {state: sum(item.status == state for item in requests) for state in
+    executions = [execution_view(item) for item in requests] + [recommended_view(item) for item in recommended or []]
+    counts = {state: sum(item['status'] == state for item in executions) for state in
               ('Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled')}
     snapshot = authorization.snapshot if authorization else {}
     from .baseline_catalog import fingerprint
@@ -130,11 +133,11 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
         # Permission to request preparation, not proof of dispatch eligibility.
         'can_schedule_service_discovery': bool(assessment.status == 'Testing'
             and assessment.creator_id == user.id and authorization is not None),
-        'counts': {'total': len(requests), 'in_progress': counts['Running'],
+        'counts': {'total': len(executions), 'in_progress': counts['Running'],
                    'completed': counts['Completed'], 'failed': counts['Failed'],
                    'queued': counts['Queued'], 'stopped': counts['Stopped'],
                    'blocked': counts['Blocked'], 'cancelled': counts['Cancelled']},
-        'executions': [execution_view(item) for item in requests],
+        'executions': sorted(executions, key=lambda item: (str(item['created_at']),str(item['id']))),
         'authorization_scope': {
             'authorization_id': authorization.id if authorization else None,
             'boundaries': boundary_rows if scope_current else None,
@@ -162,10 +165,7 @@ def testing_overview(assessment_id: UUID, user: User = Depends(analyst), db: Ses
 
 @router.get('/executions')
 def list_executions(assessment_id: UUID, user: User = Depends(analyst), db: Session = Depends(get_db)):
-    assessment_for(db, assessment_id, user)
-    return [execution_view(item) for item in db.scalars(select(BaselineExecutionRequest)
-            .where(BaselineExecutionRequest.assessment_id == assessment_id)
-            .order_by(BaselineExecutionRequest.created_at, BaselineExecutionRequest.id))]
+    return testing_overview(assessment_id, user, db)['executions']
 
 
 @router.get('/executions/{execution_id}')
@@ -198,7 +198,8 @@ def execution_details(assessment_id: UUID, execution_id: UUID,
         .where(Assessment.id == assessment_id, accessible(user), BaselineExecutionRequest.id == execution_id)
         .execution_options(populate_existing=True)).one_or_none()
     if row is None:
-        raise HTTPException(404)
+        from .recommended_testing_reads import details
+        return details(db, assessment_id, execution_id, user)
     request, attempts, evidence, processing, observations, events = row
     from .testing_read_summary import dispatch_history
     return {**execution_view(request), 'authorized_activity': request.authorized_activity,
@@ -226,7 +227,8 @@ def original_evidence(assessment_id: UUID, execution_id: UUID, evidence_id: UUID
         .where(Assessment.id == assessment_id, accessible(user), ScannerEvidence.id == evidence_id,
                BaselineExecutionRequest.id == execution_id))
     if source is None:
-        raise HTTPException(404)
+        from .recommended_testing_reads import original
+        return original(db, assessment_id, execution_id, evidence_id, user)
     from .config import get_settings
     from .evidence_reading import EvidenceUnavailable, read_original
     try:
@@ -296,93 +298,81 @@ def recommendation_authorization_review(
     return {'assessment_id': assessment_id, **result}
 
 
-@router.get('/recommendations/{recommendation_id}/start-readiness')
-def recommended_start_readiness(
-    assessment_id: UUID, recommendation_id: str,
-    user: User = Depends(analyst), db: Session = Depends(get_db),
-):
-    """Server-owned T-04D readiness; acceptance alone never enables execution."""
-    from .testing_completion_service import recommendation_state
-    from .nikto_profile import authority
+def recommended_receipt(job, replay=False):
+    return {'id': job.id, 'assessment_id': job.assessment_id, 'recommendation_id': job.recommendation_id,
+            'status': job.status, 'tool': job.tool, 'already_requested': replay,
+            'execution_authorized': False}
 
-    assessment = assessment_for(db, assessment_id, user)
-    state = recommendation_state(db, assessment_id, user)
-    item = next((row for row in state['recommendations'] if row['id'] == recommendation_id), None)
-    if item is None:
-        raise HTTPException(404, detail='Recommendation unavailable')
-    accepted = item['decision'] == 'Reviewed' and item.get('review_outcome') == 'Accepted'
-    supported = item.get('suggested_tool') == 'Nikto' and item.get('proposed_test', {}).get('id') == 'http-server-assessment'
-    enabled = authority()['execution_enabled'] is True
-    return {'assessment_id': assessment_id, 'recommendation_id': recommendation_id,
-            'ready': bool(assessment.status == 'Testing' and accepted and supported and enabled),
-            'reason_code': ('ready' if assessment.status == 'Testing' and accepted and supported and enabled
-                            else 'execution_integration_pending' if not enabled and accepted and supported
-                            else 'recommendation_not_accepted_or_supported')}
+
+@router.get('/recommendations/{recommendation_id}/start-readiness')
+def recommended_start_readiness(assessment_id: UUID, recommendation_id: str,
+    user: User = Depends(analyst), db: Session = Depends(get_db)):
+    from .recommended_test_authorization import preparation, StartUnavailable
+    from .nikto_profile import authority
+    from .baseline_catalog import fingerprint
+    assessment_for(db, assessment_id, user)
+    db.scalar(select(Assessment).where(Assessment.id == assessment_id).with_for_update(read=True))
+    result = {'assessment_id': assessment_id, 'recommendation_id': recommendation_id,
+              'ready': False, 'reason_code': 'execution_integration_pending',
+              'snapshot_digest': None, 'configured_profile': None, 'endpoint': None}
+    try:
+        facts = preparation(db, assessment_id, user.id, recommendation_id, lock=False)
+    except StartUnavailable as exc:
+        result['reason_code'] = str(exc)
+        return result
+    result.update(snapshot_digest=fingerprint(facts), configured_profile='Web Server Security Checks',
+                  endpoint=facts['plan']['endpoint_preview'])
+    if authority()['execution_enabled']:
+        result.update(ready=True, reason_code='ready')
+    return result
+
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class RecommendedStartBody(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    snapshot_digest: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
 @router.post('/recommendations/{recommendation_id}/start', status_code=202)
-def start_recommended_test(
-    assessment_id: UUID,
-    recommendation_id: str,
-    request: Request,
-    user: User = Depends(analyst),
-    db: Session = Depends(get_db),
-):
-    """T-04D Start Test: one immutable queued job per accepted recommendation.
-
-    This does not reuse assessment-start authorization or launch a subprocess.
-    The dedicated queue consumer must revalidate scope before dispatch.
-    """
-    from .testing_completion_routes import csrf_guard, assessment_row
-    from .testing_completion_service import recommendation_state, trusted_recommendation_observations
-    from .recommendation_planner import plan_recommendations
-    from .nikto_profile import plan as nikto_plan, PROFILE_ID, VERSION
-    from .models import AssessmentTarget, RecommendedTestJob
-    from .target_scope import classify, scope_entries
-
+def start_recommended_test(assessment_id: UUID, recommendation_id: str, body: RecommendedStartBody,
+    request: Request, user: User = Depends(analyst), db: Session = Depends(get_db)):
+    from .testing_completion_routes import csrf_guard
+    from .recommended_test_authorization import preparation, consent, StartUnavailable
+    from .recommended_test_queue import RecommendedTestJob
+    from .recommended_test_runner import event
+    from .nikto_profile import authority, PROFILE_ID, VERSION
+    from .baseline_catalog import fingerprint
     csrf_guard(request, user, db)
-    from .nikto_profile import authority
+    assessment_for(db, assessment_id, user)
     if not authority()['execution_enabled']:
-        raise HTTPException(503, detail='Recommended test execution is not enabled')
-    # Serialize recommendation decisions, scope changes and Start Test requests.
-    assessment = assessment_row(db, assessment_id, user, lock=True)
-    if assessment.status != 'Testing':
-        raise HTTPException(409, detail='Assessment is not in Testing')
-    current = recommendation_state(db, assessment_id, user)
-    item = next((r for r in current['recommendations'] if r['id'] == recommendation_id), None)
-    if item is None:
-        raise HTTPException(404, detail='Recommendation unavailable')
-    if item['decision'] != 'Reviewed' or item.get('review_outcome') != 'Accepted':
-        raise HTTPException(409, detail='Recommendation must be accepted before Start Test')
-    if item.get('suggested_tool') != 'Nikto' or item.get('proposed_test', {}).get('id') != 'http-server-assessment':
-        raise HTTPException(409, detail='Recommended tool is not supported for execution')
-    target = db.scalar(select(AssessmentTarget).where(
-        AssessmentTarget.id == item['target_id'], AssessmentTarget.assessment_id == assessment_id))
-    if (target is None or target.scope_status != 'in_scope' or target.kind != 'IP address'
-            or target.scope_revision != assessment.scope_revision or target.normalized_value != item['target']
-            or classify(target.normalized_value, target.kind, scope_entries(db, assessment_id))[0] != 'in_scope'):
-        raise HTTPException(409, detail='Recommended target is not in the current approved scope')
-    # Re-derive the endpoint from persisted, trusted observations. Never accept
-    # a client-supplied host, port, protocol, profile, or command line.
-    observations = trusted_recommendation_observations(db, assessment_id)
-    matches = [r for r in plan_recommendations(observations) if r['id'] == recommendation_id]
-    if len(matches) != 1 or matches[0]['target_id'] != target.id:
-        raise HTTPException(409, detail='Recommendation evidence is no longer current')
+        raise HTTPException(503, detail={'code': 'execution_integration_pending'})
     try:
-        execution_plan = nikto_plan(item['target'], item['port'], item['service'])
-    except (KeyError, ValueError, TypeError):
-        raise HTTPException(409, detail='Recommended HTTP endpoint is not executable')
-    existing = db.scalar(select(RecommendedTestJob).where(
-        RecommendedTestJob.assessment_id == assessment_id,
-        RecommendedTestJob.recommendation_id == recommendation_id))
-    if existing is not None:
-        return {'id': existing.id, 'status': existing.status, 'tool': existing.tool, 'already_requested': True}
-    job = RecommendedTestJob(
-        assessment_id=assessment_id, target_id=target.id, actor_id=user.id,
-        recommendation_id=recommendation_id, tool='Nikto', profile_id=PROFILE_ID,
-        profile_version=VERSION, scope_revision=assessment.scope_revision,
-        execution_plan=execution_plan, status='Queued')
-    db.add(job)
+        facts = preparation(db, assessment_id, user.id, recommendation_id)
+    except StartUnavailable as exc:
+        raise HTTPException(403 if str(exc) == 'recommended_creator_required' else 409,
+                            detail={'code': str(exc)}) from None
+    if fingerprint(facts) != body.snapshot_digest:
+        raise HTTPException(409, detail={'code': 'recommended_review_stale'})
+    existing = db.scalar(select(RecommendedTestJob).where(RecommendedTestJob.assessment_id == assessment_id,
+                                                       RecommendedTestJob.recommendation_id == recommendation_id))
+    if existing is not None: return recommended_receipt(existing, True)
+    job = RecommendedTestJob(assessment_id=assessment_id, target_id=UUID(facts['target_id']), actor_id=user.id,
+        recommendation_id=recommendation_id, tool='Nikto', profile_id=PROFILE_ID, profile_version=VERSION,
+        scope_revision=facts['scope_revision'], execution_plan=facts['plan'], authorization_snapshot=consent(facts), status='Queued')
+    db.add(job); db.flush()
+    event(db, job, 'execution_queued', 'explicit_recommended_start')
+    receipt = recommended_receipt(job)
     db.commit()
-    db.refresh(job)
-    return {'id': job.id, 'status': job.status, 'tool': job.tool, 'already_requested': False}
+    return receipt
+
+
+@router.get('/recommendations/{recommendation_id}/start-receipt')
+def recommended_start_receipt(assessment_id: UUID, recommendation_id: str,
+    user: User = Depends(analyst), db: Session = Depends(get_db)):
+    from .recommended_test_queue import RecommendedTestJob
+    job = db.scalar(select(RecommendedTestJob).join(Assessment, Assessment.id == RecommendedTestJob.assessment_id)
+        .where(Assessment.id == assessment_id, accessible(user), RecommendedTestJob.recommendation_id == recommendation_id))
+    if job is None: raise HTTPException(404)
+    return recommended_receipt(job, True)

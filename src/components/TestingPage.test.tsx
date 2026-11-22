@@ -736,3 +736,26 @@ it('displays authoritative discovery totals, scope and authorization identity wi
   expect(screen.getByText('Web target').previousElementSibling).toHaveTextContent('—')
   expect(screen.queryByText('Not provided by the Testing API.')).not.toBeInTheDocument()
 })
+
+
+it.each(['Queued', 'Running', 'Completed', 'Failed', 'Blocked'] as ExecutionStatus[])(
+  'displays a persisted recommended %s job without inventing Nmap observations', async status => {
+    const overview = testingData([status])
+    Object.assign(overview.executions[0], { tool: 'Nikto', test_name: 'HTTP Server Assessment',
+      profile_id: 'nikto-http-service-restricted', execution_kind: 'recommended', authorization_id: null })
+    const detail = { ...executionDetails(), ...overview.executions[0], execution_kind: 'recommended',
+      recommended_result: { termination_verified: status === 'Completed' || status === 'Failed',
+        integrity_verified: status === 'Completed' || status === 'Failed', partial: status !== 'Completed',
+        failure_reason: status === 'Failed' ? 'scanner_failed' : null } }
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => reply(String(input).endsWith('/synthetic-execution-0') ? detail : overview))
+    vi.stubGlobal('fetch', fetcher)
+    page()
+    fireEvent.click(await screen.findByRole('button', { name: /View Details:/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText('Tool: Nikto')).toBeVisible()
+    expect(within(dialog).getByText(status, { selector: 'span' })).toBeVisible()
+    expect(within(dialog).getByText(/No normalized findings are asserted/)).toBeVisible()
+    expect(within(dialog).queryByText(/Host reachability alone/)).not.toBeInTheDocument()
+    if (status === 'Failed') expect(within(dialog).getByText('scanner_failed')).toBeVisible()
+    if (status === 'Blocked') expect(within(dialog).queryByText(/completion cannot be verified/)).not.toBeInTheDocument()
+  })
