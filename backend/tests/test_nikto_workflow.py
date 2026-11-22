@@ -73,7 +73,11 @@ class FakeNikto:
         return self.outcome
 
 
-def test_release_remains_disabled_and_never_queues(client, db, accepted):
+def test_release_remains_disabled_and_never_queues(client, db, accepted, monkeypatch):
+    from app.config import get_settings
+    settings = get_settings()
+    monkeypatch.setattr(settings, 'nikto_policy_version', None)
+    monkeypatch.setattr(settings, 'nikto_policy_digest', None)
     path, headers, rec = accepted
     assert nikto_profile.authority()['execution_enabled'] is False
     ready = client.get(path+f"/testing/recommendations/{rec['id']}/start-readiness").json()
