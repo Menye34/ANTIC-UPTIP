@@ -2,12 +2,15 @@
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
+import logging
 from sqlalchemy import select, text
 from .models import ExecutionAttempt
 from .recommended_test_queue import RecommendedTestJob, RecommendedTestEvent
 from .recommended_test_consumer import dispatch_readiness, fresh_scope_check
 from .recommended_test_results import mark_running, record_outcome
 from .nmap_adapter import AdapterUnavailable
+
+logger = logging.getLogger(__name__)
 
 
 def event(db, job, kind, reason):
@@ -115,7 +118,7 @@ class RecommendedTestRunner:
                 with self.factory.begin() as db:
                     process_job(db, job_id)
             except Exception:
-                pass
+                logger.exception('recommended_result_normalization_failed job_id=%s', job_id)
             return True
         except Exception as exc:
             if claimed:
