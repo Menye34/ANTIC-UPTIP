@@ -15,8 +15,12 @@ from .config import get_settings
 from .execution_orchestration import ExecutionRunner, recover_expired
 from .execution_results import EvidenceStore
 from .models import BaselineExecutionRequest
-from .nmap_adapter import AdapterConfig, NmapAdapter
+from .nmap_adapter import AdapterConfig
+from .nikto_adapter import NiktoConfig
+from .tool_adapter_registry import resolve_adapter
 from .worker_diagnostics import diagnostics
+from .recommended_test_consumer import pending_ids, dispatch_readiness
+from .recommended_test_queue import RecommendedTestJob
 
 
 def main(argv=None):
@@ -33,14 +37,31 @@ def main(argv=None):
     parser.add_argument('--timeout', type=int, default=600)
     parser.add_argument('--output-limit', type=int, default=10*1024*1024)
     parser.add_argument('--safety-interval', type=float, default=5)
+    parser.add_argument('--nikto-executable', help='Operator-pinned local Nikto executable')
+    parser.add_argument('--nikto-sha256', help='SHA-256 of the pinned Nikto executable')
+    parser.add_argument('--nikto-version', help='Expected installed Nikto version')
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--enable-dispatch', action='store_true', help='Explicit operator opt-in; never grants authorization')
     args = parser.parse_args(argv)
     if not args.enable_dispatch:
         parser.error('Dispatch requires explicit operator opt-in and independent runtime authorization.')
     print('uptip_worker_started ' + json.dumps(diagnostics(), sort_keys=True), flush=True)
-    adapter = NmapAdapter(AdapterConfig(args.executable, args.sha256, args.version,
+    # The existing queue contains only Nmap baseline/service-discovery requests.
+    # Resolve through the shared registry without enabling unimplemented Nikto
+    # scheduling or allowing a recommendation to inherit Nmap authorization.
+    adapter = resolve_adapter('Nmap', 'host-discovery', AdapterConfig(
+        args.executable, args.sha256, args.version,
         args.timeout, args.output_limit, args.safety_interval))
+    # Optional Nikto readiness probe. All three settings must be supplied
+    # together; this never grants dispatch authorization or starts a scan.
+    nikto_values = (args.nikto_executable, args.nikto_sha256, args.nikto_version)
+    if any(value is not None for value in nikto_values):
+        if not all(nikto_values):
+            parser.error('Nikto executable, sha256 and version must be configured together')
+        nikto = resolve_adapter('Nikto', 'nikto-http-service-restricted', NiktoConfig(
+            args.nikto_executable, args.nikto_sha256, args.nikto_version))
+        nikto.verify()  # Version probe only, no target or scan.
+        print('uptip_nikto_adapter_verified', flush=True)
     store = EvidenceStore(args.evidence_directory)
     adapter.verify()  # Version only; no target or scan.
     stopped = False
@@ -99,6 +120,15 @@ def main(argv=None):
                 if stopped:
                     break
                 runner.run(request_id)
+            # Dedicated recommendation queue; never inherits the Nmap grant.
+            # The release profile currently disables Nikto execution until
+            # exact-endpoint network isolation and worker revalidation exist.
+            with factory() as db:
+                recommended_ids = pending_ids(db)
+                for recommended_id in recommended_ids:
+                    job = db.get(RecommendedTestJob, recommended_id)
+                    if job is not None and dispatch_readiness(job, boundary_enforced=False):
+                        raise RuntimeError('Recommended execution dispatcher is not configured')
             if args.once:
                 break
             for _ in range(20):

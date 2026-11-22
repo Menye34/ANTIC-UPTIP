@@ -234,3 +234,25 @@
 .testing-original-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; font-size: 12px; }
 .testing-proposed-fields { grid-template-columns: minmax(0,2fr) minmax(0,1fr); margin-bottom: 16px; }
 .testing-review-footer .testing-review-accept:not(:disabled) { background: #2563eb; border-color: #2563eb; color: white; }
+
+/* T-04D — centered Start Test confirmation from the Testing design PDF, page 9. */
+.testing-start-dialog { position: fixed; margin: auto; inset: 0; width: min(560px, calc(100vw - 32px)); max-width: 560px; max-height: min(85dvh, 740px); overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 10px; background: white; color: #1e293b; box-shadow: 0 20px 60px rgb(15 23 42 / .2); padding: 0; }
+.testing-start-dialog:not([open]) { display: none; }
+.testing-start-dialog::backdrop { background: rgb(15 23 42 / .45); }
+.testing-start-header { display: flex; justify-content: space-between; gap: 16px; padding: 22px 24px 12px; }
+.testing-start-header h2 { font-size: 20px; font-weight: 600; }
+.testing-start-header p { font-size: 13px; color: #64748b; margin-top: 6px; }
+.testing-start-header button { border: 0; background: transparent; font-size: 22px; align-self: flex-start; cursor: pointer; }
+.testing-start-body { padding: 0 24px 20px; font-size: 13px; }
+.testing-start-body > h3 { font-size: 16px; font-weight: 600; margin: 8px 0; }
+.testing-start-accepted { color: #166534; background: #dcfce7; border-radius: 4px; padding: 4px 8px; display: inline-block; }
+.testing-start-body section { margin-top: 22px; }
+.testing-start-body h4 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+.testing-start-body dl { display: grid; gap: 12px; }
+.testing-start-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.testing-start-body dt { color: #64748b; font-size: 12px; }
+.testing-start-body dd { margin: 4px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.testing-start-body section > p { color: #475569; margin-top: 10px; line-height: 1.5; }
+.testing-start-footer { display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid #e2e8f0; padding: 16px 24px; }
+.testing-start-footer button { min-height: 36px; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
+.testing-start-footer button:disabled { cursor: not-allowed; opacity: .55; }

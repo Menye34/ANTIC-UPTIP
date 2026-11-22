@@ -72,3 +72,38 @@ Introduce an explicit, fail-closed adapter registry keyed by approved tool and
 profile, with per-tool launch/poll/cancel/result contracts. Keep tool-specific
 authorization, evidence format, external job IDs, and recovery policy distinct.
 Do not treat a generic API response as proof that a scanner has terminated.
+
+## Nikto access for the existing Kali worker account
+
+Nikto is installed on the Kali host at `/usr/bin/nikto` (version 2.6.1).
+No new operating-system service, privileged worker account, or broad filesystem
+permission is required. The worker must run under the existing unprivileged
+account that can read and execute the installed binary and its Perl dependencies.
+
+On Kali, inspect the deployed service account:
+
+```bash
+systemctl show uptip-execution-worker.service -p User -p Group -p ExecStart
+ls -l /usr/bin/nikto
+```
+
+Replace `WORKER_USER` below with the actual `User=` value (do not guess it).
+Run the **read-only** version probe under that account:
+
+```bash
+sudo -u WORKER_USER python3 deploy/scripts/check_nikto_worker_access.py \
+  --worker-user WORKER_USER --executable /usr/bin/nikto
+```
+
+This verifies execution permissions without running a scan. If it fails,
+inspect directory traversal permissions and the service sandbox; do not use
+`chmod 777`, `sudo nikto`, root-run worker processes, or add capabilities.
+The systemd template already uses `NoNewPrivileges=true`, an empty capability
+bounding set, and an unprivileged `User=`. Keep those restrictions. If the
+probe succeeds outside systemd but not inside, inspect `ProtectHome`,
+`ProtectSystem`, `PrivateTmp` and the Nikto Perl runtime dependencies before
+making a narrowly scoped override.
+
+**Important:** this probe only establishes access to the installed executable.
+It does not enable recommended-test dispatch or verify network isolation,
+queue permissions, or Nikto execution against any target.

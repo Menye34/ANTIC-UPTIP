@@ -237,3 +237,26 @@ export async function getOriginalEvidence(assessmentId: string, executionId: str
     || value.format !== source.format || value.partial !== source.partial) throw new Error('Invalid original evidence response')
   return value
 }
+
+/** The T-04D action submits no target, port or command-line overrides. */
+export async function startRecommendedTest(assessmentId: string, recommendationId: string,
+  csrfToken: string, signal: AbortSignal) {
+  const receipt = await startRequest<{ id: string; status: ExecutionStatus; tool: string; already_requested: boolean }>(
+    assessmentId, '/testing/recommendations/' + encodeURIComponent(recommendationId) + '/start', signal,
+    { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } })
+  if (!receipt || typeof receipt.id !== 'string' || receipt.tool !== 'Nikto'
+    || !executionStates.includes(receipt.status) || typeof receipt.already_requested !== 'boolean') {
+    throw new Error('Invalid recommended-test start receipt')
+  }
+  return receipt
+}
+
+export async function getRecommendedStartReadiness(assessmentId: string, recommendationId: string, signal: AbortSignal) {
+  const result = await startRequest<{assessment_id: string; recommendation_id: string; ready: boolean; reason_code: string}>(
+    assessmentId, '/testing/recommendations/' + encodeURIComponent(recommendationId) + '/start-readiness', signal)
+  if (result.assessment_id !== assessmentId || result.recommendation_id !== recommendationId
+    || typeof result.ready !== 'boolean' || typeof result.reason_code !== 'string') {
+    throw new Error('Invalid Start Test readiness response')
+  }
+  return result
+}

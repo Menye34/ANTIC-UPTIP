@@ -1,7 +1,7 @@
 """Read-only Testing views backed by persisted execution requests."""
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select, and_
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import aggregate_order_by
@@ -294,3 +294,95 @@ def recommendation_authorization_review(
         raise HTTPException(404, detail='Recommendation unavailable')
 
     return {'assessment_id': assessment_id, **result}
+
+
+@router.get('/recommendations/{recommendation_id}/start-readiness')
+def recommended_start_readiness(
+    assessment_id: UUID, recommendation_id: str,
+    user: User = Depends(analyst), db: Session = Depends(get_db),
+):
+    """Server-owned T-04D readiness; acceptance alone never enables execution."""
+    from .testing_completion_service import recommendation_state
+    from .nikto_profile import authority
+
+    assessment = assessment_for(db, assessment_id, user)
+    state = recommendation_state(db, assessment_id, user)
+    item = next((row for row in state['recommendations'] if row['id'] == recommendation_id), None)
+    if item is None:
+        raise HTTPException(404, detail='Recommendation unavailable')
+    accepted = item['decision'] == 'Reviewed' and item.get('review_outcome') == 'Accepted'
+    supported = item.get('suggested_tool') == 'Nikto' and item.get('proposed_test', {}).get('id') == 'http-server-assessment'
+    enabled = authority()['execution_enabled'] is True
+    return {'assessment_id': assessment_id, 'recommendation_id': recommendation_id,
+            'ready': bool(assessment.status == 'Testing' and accepted and supported and enabled),
+            'reason_code': ('ready' if assessment.status == 'Testing' and accepted and supported and enabled
+                            else 'execution_integration_pending' if not enabled and accepted and supported
+                            else 'recommendation_not_accepted_or_supported')}
+
+
+@router.post('/recommendations/{recommendation_id}/start', status_code=202)
+def start_recommended_test(
+    assessment_id: UUID,
+    recommendation_id: str,
+    request: Request,
+    user: User = Depends(analyst),
+    db: Session = Depends(get_db),
+):
+    """T-04D Start Test: one immutable queued job per accepted recommendation.
+
+    This does not reuse assessment-start authorization or launch a subprocess.
+    The dedicated queue consumer must revalidate scope before dispatch.
+    """
+    from .testing_completion_routes import csrf_guard, assessment_row
+    from .testing_completion_service import recommendation_state, trusted_recommendation_observations
+    from .recommendation_planner import plan_recommendations
+    from .nikto_profile import plan as nikto_plan, PROFILE_ID, VERSION
+    from .models import AssessmentTarget, RecommendedTestJob
+    from .target_scope import classify, scope_entries
+
+    csrf_guard(request, user, db)
+    from .nikto_profile import authority
+    if not authority()['execution_enabled']:
+        raise HTTPException(503, detail='Recommended test execution is not enabled')
+    # Serialize recommendation decisions, scope changes and Start Test requests.
+    assessment = assessment_row(db, assessment_id, user, lock=True)
+    if assessment.status != 'Testing':
+        raise HTTPException(409, detail='Assessment is not in Testing')
+    current = recommendation_state(db, assessment_id, user)
+    item = next((r for r in current['recommendations'] if r['id'] == recommendation_id), None)
+    if item is None:
+        raise HTTPException(404, detail='Recommendation unavailable')
+    if item['decision'] != 'Reviewed' or item.get('review_outcome') != 'Accepted':
+        raise HTTPException(409, detail='Recommendation must be accepted before Start Test')
+    if item.get('suggested_tool') != 'Nikto' or item.get('proposed_test', {}).get('id') != 'http-server-assessment':
+        raise HTTPException(409, detail='Recommended tool is not supported for execution')
+    target = db.scalar(select(AssessmentTarget).where(
+        AssessmentTarget.id == item['target_id'], AssessmentTarget.assessment_id == assessment_id))
+    if (target is None or target.scope_status != 'in_scope' or target.kind != 'IP address'
+            or target.scope_revision != assessment.scope_revision or target.normalized_value != item['target']
+            or classify(target.normalized_value, target.kind, scope_entries(db, assessment_id))[0] != 'in_scope'):
+        raise HTTPException(409, detail='Recommended target is not in the current approved scope')
+    # Re-derive the endpoint from persisted, trusted observations. Never accept
+    # a client-supplied host, port, protocol, profile, or command line.
+    observations = trusted_recommendation_observations(db, assessment_id)
+    matches = [r for r in plan_recommendations(observations) if r['id'] == recommendation_id]
+    if len(matches) != 1 or matches[0]['target_id'] != target.id:
+        raise HTTPException(409, detail='Recommendation evidence is no longer current')
+    try:
+        execution_plan = nikto_plan(item['target'], item['port'], item['service'])
+    except (KeyError, ValueError, TypeError):
+        raise HTTPException(409, detail='Recommended HTTP endpoint is not executable')
+    existing = db.scalar(select(RecommendedTestJob).where(
+        RecommendedTestJob.assessment_id == assessment_id,
+        RecommendedTestJob.recommendation_id == recommendation_id))
+    if existing is not None:
+        return {'id': existing.id, 'status': existing.status, 'tool': existing.tool, 'already_requested': True}
+    job = RecommendedTestJob(
+        assessment_id=assessment_id, target_id=target.id, actor_id=user.id,
+        recommendation_id=recommendation_id, tool='Nikto', profile_id=PROFILE_ID,
+        profile_version=VERSION, scope_revision=assessment.scope_revision,
+        execution_plan=execution_plan, status='Queued')
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return {'id': job.id, 'status': job.status, 'tool': job.tool, 'already_requested': False}

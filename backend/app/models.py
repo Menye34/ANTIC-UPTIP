@@ -369,3 +369,6 @@ from .testing_completion_models import (
 from .recommendation_review_models import RecommendationReviewEvent
 
 from .service_discovery_models import ServiceDiscoveryConsent, ServiceDiscoveryRevocation
+
+# Separate queue for recommended tests; never an assessment-start request.
+from .recommended_test_queue import RecommendedTestJob
