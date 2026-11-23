@@ -12,15 +12,24 @@ CLUSTER_MARKER = 'UPTIP disposable test cluster'
 
 
 def scheduling_database(name, admin_raw, owner_raw, runtime_raw, test_url, *, kind='schedule'):
-    marker = {'schedule': MARKER, 'migration': 'UPTIP disposable isolated migration test database'}.get(kind)
+    marker = {
+        'schedule': MARKER,
+        'migration': 'UPTIP disposable isolated migration test database',
+        'nikto': 'UPTIP disposable isolated Nikto integration test database',
+    }.get(kind)
     if marker is None:
         raise RuntimeError('Refusing unverified database kind')
     admin, owner, runtime = map(make_url, (admin_raw, owner_raw, runtime_raw))
     test = make_url(str(test_url))
+    expected_source = (
+        'uptip_test_nikto_normalization'
+        if kind == 'nikto'
+        else 'uptip_test_readiness_fix'
+    )
     if not (re.fullmatch(r'uptip_test_' + kind + r'_[0-9a-f]{32}', name)
             and admin.database == 'postgres' and admin.username == 'postgres'
             and owner.username == 'uptip' and runtime.username == 'uptip_runtime'
-            and owner.database == runtime.database == test.database == 'uptip_test_readiness_fix'
+            and owner.database == runtime.database == test.database == expected_source
             and all(url.drivername == 'postgresql+psycopg' and url.host == '127.0.0.1'
                     and not url.query for url in (admin, owner, runtime, test))
             and len({url.port for url in (admin, owner, runtime, test)}) == 1):
@@ -31,7 +40,7 @@ def scheduling_database(name, admin_raw, owner_raw, runtime_raw, test_url, *, ki
         with engine.connect() as conn:
             if conn.scalar(text("SELECT shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()")) != CLUSTER_MARKER:
                 raise RuntimeError('Disposable cluster marker missing')
-            base = conn.execute(text("SELECT pg_get_userbyid(datdba), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=:name"), {'name': 'uptip_test_readiness_fix'}).one_or_none()
+            base = conn.execute(text("SELECT pg_get_userbyid(datdba), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=:name"), {'name': expected_source}).one_or_none()
             if base != ('uptip', 'UPTIP disposable integration test database'):
                 raise RuntimeError('Disposable test database identity mismatch')
             if action == 'verify':

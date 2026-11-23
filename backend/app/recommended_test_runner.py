@@ -36,7 +36,23 @@ class RecommendedTestRunner:
         if self.stopping() or self.boundary is None: return False
         with self.factory() as db:
             job = db.get(RecommendedTestJob, job_id)
-            if job is None or not dispatch_readiness(job, boundary_enforced=True): return False
+            if job is None or job.status != 'Queued':
+                return False
+            if not dispatch_readiness(job, boundary_enforced=True):
+                # A valid queued job may simply be awaiting release.
+                # Invalidate only jobs whose previously accepted policy
+                # is no longer current.
+                from .nikto_profile import validate_plan, dispatch_enabled
+                if validate_plan(job.execution_plan) and not dispatch_enabled(job.execution_plan):
+                    with self.factory.begin() as locked_db:
+                        current = locked(locked_db, job_id)
+                        if (current is not None and current.status == 'Queued'
+                                and validate_plan(current.execution_plan)
+                                and not dispatch_enabled(current.execution_plan)):
+                            current.status = 'Blocked'
+                            current.failure_reason = 'recommended_authorization_unverified'
+                            event(locked_db, current, 'dispatch_blocked', current.failure_reason)
+                return False
             plan = dict(job.execution_plan)
         claimed = False
         launched = False

@@ -515,6 +515,39 @@ def test_nikto_normalizer_only_extracts_explicit_path_observations():
     assert rows[0]['data']['verification'] == 'unverified'
 
 
+
+def test_nikto_normalizer_accepts_six_digit_test_ids():
+    from app.nikto_normalizer import normalize
+
+    content = (
+        b'- Nikto v2.6.1\n'
+        b'+ [013587] /: The X-Content-Type-Options header is not set.\n'
+        b'+ [013587] /: The X-Content-Type-Options header is not set.\n'
+        b'+ [999999] /./: Directory indexing found.\n'
+        b'+ Server: example\n'
+    )
+
+    rows = normalize(
+        content,
+        target='192.0.2.10',
+        port=8080,
+        scheme='http',
+    )
+
+    assert len(rows) == 2
+
+    first, second = rows
+
+    assert first['type'] == 'http_server_test'
+    assert first['data']['test_id'] == '013587'
+    assert first['data']['path'] == '/'
+    assert first['data']['verification'] == 'unverified'
+    assert 'X-Content-Type-Options' in first['data']['message']
+
+    assert second['data']['test_id'] == '999999'
+    assert second['data']['path'] == '/./'
+    assert second['data']['verification'] == 'unverified'
+
 def test_nikto_results_are_persisted_and_returned_without_raw_output(client, db, accepted, test_release):
     from app.recommended_normalization_models import RecommendedObservation, RecommendedProcessingOutcome
     path, _, _ = accepted

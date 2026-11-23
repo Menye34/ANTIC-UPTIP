@@ -88,6 +88,66 @@ def db(engine):
 
 
 
+
+@pytest.fixture
+def nikto_owner_db():
+    """Rollback-only owner session for disposable Nikto integration tests."""
+    from app.config import get_settings
+
+    runtime = make_url(os.environ["UPTIP_TEST_DATABASE_URL"])
+    owner = make_url(os.environ["UPTIP_MIGRATION_DATABASE_URL"])
+
+    assert runtime.drivername == owner.drivername == "postgresql+psycopg"
+    assert runtime.database == "uptip_test_nikto_normalization"
+    assert runtime.username == "uptip_runtime"
+    assert owner.username == "uptip"
+    assert runtime.host == owner.host == "127.0.0.1"
+    assert runtime.port in (None, 5432)
+    assert owner.port in (None, 5432)
+    assert owner.database == "uptip"
+    assert not runtime.query and not owner.query
+
+    dedicated = create_engine(
+        owner.set(database=runtime.database),
+        hide_parameters=True,
+    )
+
+    try:
+        with dedicated.connect() as connection:
+            identity = connection.execute(text("""
+                SELECT current_user,
+                       current_database(),
+                       shobj_description(oid, 'pg_database')
+                FROM pg_database
+                WHERE datname = current_database()
+            """)).one()
+
+            assert identity == (
+                "uptip",
+                "uptip_test_nikto_normalization",
+                "UPTIP disposable integration test database",
+            )
+
+            # Identity SELECT already opened an implicit transaction.
+            # Roll it back before starting the test's outer transaction.
+            connection.rollback()
+            transaction = connection.begin()
+
+            try:
+                factory = sessionmaker(
+                    bind=connection,
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                with factory() as session:
+                    yield session
+            finally:
+                if transaction.is_active:
+                    transaction.rollback()
+    finally:
+        dedicated.dispose()
+
+
 @pytest.fixture
 def migration_db(monkeypatch):
     """Fresh, marked database per invocation; never reuse committed history."""

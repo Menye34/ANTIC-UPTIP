@@ -119,6 +119,11 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
     return o.type === 'service_discovery' && d.state === 'open' && d.transport === 'tcp'
       && typeof d.port === 'number' && Number.isInteger(d.port) && d.port > 0 && d.port <= 65535 && typeof d.service === 'string'
   })
+  const niktoObservations = (data?.observations ?? []).filter(
+    o => o.type === 'http_server_test'
+      && typeof o.data.message === 'string'
+      && typeof o.data.path === 'string'
+  )
   const title = data?.status === 'Running' ? 'Running Test Details' : data?.status === 'Failed' ? 'Failed Test Details' : 'Test Details'
   return <dialog className="testing-review-dialog testing-execution-drawer" ref={dialog} aria-labelledby="execution-details-title" onCancel={event => { event.preventDefault(); onClose() }}>
     <header className="testing-review-header"><h2 id="execution-details-title">{title}</h2>
@@ -128,7 +133,9 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
       {!data && !error ? <p role="status">Loading execution details…</p> : data && <>
         <section className="testing-detail-summary"><h3>{data.test_name}</h3><span className="testing-state" data-status={data.status}>{data.status}</span>
           <p>Tool: {data.tool}</p><p>Target: {data.target}</p></section>
-        <p className="testing-detail-status" role="status">{!['Queued', 'Running'].includes(data.status) && detailsNeedRefresh(data) ? 'Execution details are incomplete or uncertain; completion cannot be verified from this snapshot.' : data.status === 'Completed' ? (data.execution_kind === 'recommended' ? 'The scanner completed. Review its original output; normalized findings are not yet available.' : 'The test completed. Review the recorded ports, services and original evidence.')
+        <p className="testing-detail-status" role="status">{!['Queued', 'Running'].includes(data.status) && detailsNeedRefresh(data) ? 'Execution details are incomplete or uncertain; completion cannot be verified from this snapshot.' : data.status === 'Completed' ? (data.execution_kind === 'recommended' ? (niktoObservations.length > 0
+            ? 'The scanner completed. Review the normalized observations and original tool output. Observations are not confirmed vulnerabilities.'
+            : 'The scanner completed. No normalized observations are recorded. Review the original tool output when available.') : 'The test completed. Review the recorded ports, services and original evidence.')
           : data.status === 'Queued' ? 'This test is queued and has not started.' : `Execution status: ${data.status}. Results may be incomplete.`}</p>
         {data.dispatch_history && <section className="testing-detail-section" aria-label="Recorded dispatch outcome">
           <h3>Recorded Dispatch Outcome</h3>
@@ -138,12 +145,34 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
         </section>}
         {data.status === 'Failed' && <section aria-label="Failure information"><h3>Failure Information</h3><p>{data.recommended_result?.failure_reason ?? data.attempts.at(-1)?.reason_code ?? 'Not recorded'}</p></section>}
         <section className="testing-detail-section" aria-label="Test results"><h3>Test Results</h3>
-          {data.execution_kind === 'recommended' && <p>No normalized findings are asserted by this execution record. Original output is available below only when recorded and integrity-checked.</p>}
+          {data.execution_kind === 'recommended' && (
+            <p>{niktoObservations.length > 0
+              ? 'Scanner observations require analyst validation before they can be treated as confirmed findings.'
+              : 'No normalized observations are recorded for this test.'}</p>
+          )}
+          {niktoObservations.length > 0 && <>
+            <h4>Normalized Nikto Observations ({niktoObservations.length})</h4>
+            <p>These are unverified scanner observations, not confirmed vulnerabilities.</p>
+            <ul>
+              {niktoObservations.map(o => (
+                <li key={o.id}>
+                  <strong>{String(o.data.message)}</strong>
+                  <p>
+                    Affected path: {String(o.data.path)}
+                    {typeof o.data.test_id === 'string'
+                      ? ` · Nikto test ${o.data.test_id}`
+                      : ''}
+                    {o.partial ? ' · Partial result' : ''}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </>}
           {services.length ? <><p>{services.length} recorded open TCP services{services.some(o => o.partial) && ' (includes partial results)'}.</p>
             <table aria-label="Discovered ports and services"><thead><tr><th>Port</th><th>Service</th><th>Version</th></tr></thead><tbody>{services.map(o =>
               <tr key={o.id}><td>{String(o.data.port)}/tcp{o.partial && ' · Partial'}</td><td>{String(o.data.service).toUpperCase()}</td><td>{typeof o.data.version === 'string' ? o.data.version : 'Not identified'}</td></tr>)}</tbody></table></>
             : data.execution_kind !== 'recommended' && <p>No identified open services recorded. Host reachability alone does not identify services.</p>}
-          {data.observations.filter(o => o.type !== 'service_discovery').map(o => <p key={o.id}>{o.type === 'host_discovery'
+          {data.observations.filter(o => o.type !== 'service_discovery' && o.type !== 'http_server_test').map(o => <p key={o.id}>{o.type === 'host_discovery'
             ? `${String(o.data.address ?? data.target)} · ${String(o.data.status ?? 'unknown')}` : o.type}{o.partial && ' · Partial result'}</p>)}
         </section>
         <OriginalOutput data={data} assessmentId={assessmentId} denied={denied} />

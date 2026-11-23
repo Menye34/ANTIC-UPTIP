@@ -738,6 +738,68 @@ it('displays authoritative discovery totals, scope and authorization identity wi
 })
 
 
+
+it('displays six normalized Nikto observations as unverified scanner results', async () => {
+  const overview = testingData(['Completed'])
+  Object.assign(overview.executions[0], {
+    tool: 'Nikto',
+    test_name: 'HTTP Server Assessment',
+    profile_id: 'nikto-http-service-restricted',
+    execution_kind: 'recommended',
+    authorization_id: null,
+  })
+
+  const cases = [
+    ['013587', 'x-content-type-options', '/'],
+    ['013588', 'content-security-policy', '/'],
+    ['013589', 'permissions-policy', '/'],
+    ['013590', 'strict-transport-security', '/'],
+    ['013591', 'referrer-policy', '/'],
+    ['013592', 'Directory indexing is enabled', '/./'],
+  ] as const
+
+  const detail = {
+    ...executionDetails(),
+    ...overview.executions[0],
+    execution_kind: 'recommended',
+    recommended_result: {
+      termination_verified: true,
+      integrity_verified: true,
+      partial: false,
+      failure_reason: null,
+    },
+    observations: cases.map(([testId, message, path], index) => ({
+      id: `nikto-observation-${index}`,
+      type: 'http_server_test',
+      data: { message, path, test_id: testId },
+      partial: false,
+      evidence_id: 'nikto-evidence',
+    })),
+  }
+
+  const fetcher = vi.fn(async (input: RequestInfo | URL, _options?: RequestInit) =>
+    reply(String(input).endsWith('/synthetic-execution-0') ? detail : overview))
+  vi.stubGlobal('fetch', fetcher)
+
+  page()
+  fireEvent.click(await screen.findByRole('button', { name: /View Details:/ }))
+
+  const dialog = await screen.findByRole('dialog')
+  expect(await within(dialog).findByText('Normalized Nikto Observations (6)')).toBeVisible()
+  expect(within(dialog).getByText(/unverified scanner observations, not confirmed vulnerabilities/i)).toBeVisible()
+
+  for (const [testId, message, path] of cases) {
+    expect(within(dialog).getByText(message)).toBeVisible()
+    expect(within(dialog).getByText(
+      new RegExp(`Affected path: .*${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*Nikto test ${testId}`)
+    )).toBeVisible()
+  }
+
+  expect(within(dialog).queryByText('http_server_test')).not.toBeInTheDocument()
+  expect(fetcher.mock.calls.every(([, options]) =>
+    !(options as RequestInit | undefined)?.method)).toBe(true)
+})
+
 it.each(['Queued', 'Running', 'Completed', 'Failed', 'Blocked'] as ExecutionStatus[])(
   'displays a persisted recommended %s job without inventing Nmap observations', async status => {
     const overview = testingData([status])
@@ -754,7 +816,7 @@ it.each(['Queued', 'Running', 'Completed', 'Failed', 'Blocked'] as ExecutionStat
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('Tool: Nikto')).toBeVisible()
     expect(within(dialog).getByText(status, { selector: 'span' })).toBeVisible()
-    expect(within(dialog).getByText(/No normalized findings are asserted/)).toBeVisible()
+    expect(within(dialog).getByText(/No normalized observations are recorded for this test/)).toBeVisible()
     expect(within(dialog).queryByText(/Host reachability alone/)).not.toBeInTheDocument()
     if (status === 'Failed') expect(within(dialog).getByText('scanner_failed')).toBeVisible()
     if (status === 'Blocked') expect(within(dialog).queryByText(/completion cannot be verified/)).not.toBeInTheDocument()
