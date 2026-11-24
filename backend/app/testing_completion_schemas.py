@@ -54,7 +54,7 @@ class Summary(Contract):
     reviewed_recommendations: Count
     deferred_recommendations: Count
     decision_counts: DecisionCounts
-    candidate_findings: None
+    candidate_findings: Count | None
     blockers: list[Code]
 
     @model_validator(mode='after')

@@ -375,3 +375,10 @@ from .recommended_test_queue import RecommendedTestJob
 
 # Independent normalized recommended-test observations.
 from .recommended_normalization_models import RecommendedProcessingOutcome, RecommendedObservation
+
+# Register consolidated finding persistence.
+from .findings_models import ConsolidatedFinding, FindingObservation
+from .findings_models import FindingRecommendedObservation
+
+# Register persistent finding AI interactions.
+from .finding_ai_history_models import FindingAIHistory

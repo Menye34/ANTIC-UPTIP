@@ -184,6 +184,22 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
           </p>
         )}
         {data.status === 'Failed' && <section aria-label="Failure information"><h3>Failure Information</h3><p>{data.recommended_result?.failure_reason ?? data.attempts.at(-1)?.reason_code ?? 'Not recorded'}</p></section>}
+        {data.dispatch_status === 'dispatch_blocked' && (
+          <section
+            className="testing-detail-section"
+            aria-label="Recorded dispatch outcome"
+          >
+            <h3>Recorded Dispatch Outcome</h3>
+            <p>Dispatch blocked</p>
+            <p>Blocking reason: {data.dispatch_history?.reason_code ?? 'Not recorded'}</p>
+            {data.dispatch_history && (
+              <p>Recorded at: {time(data.dispatch_history.occurred_at)}</p>
+            )}
+            <p>
+              This is a recorded dispatch outcome, not permission for a future execution.
+            </p>
+          </section>
+        )}
         <section className="testing-detail-section" aria-label="Test results"><h3>Test Results</h3>
           {data.execution_kind === 'recommended' && niktoObservations.length === 0 && (
             <p>No normalized observations are recorded for this test.</p>

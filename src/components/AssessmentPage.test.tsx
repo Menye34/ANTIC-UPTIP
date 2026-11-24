@@ -539,3 +539,92 @@ describe('Assessment Targets after Start', () => {
     }
   })
 })
+
+
+describe('Assessment Findings navigation', () => {
+  const finding = {
+    id: 'synthetic-finding',
+    title: 'Content Security Policy Header Not Set',
+    severity: 'Medium',
+    affected_target: 'https://app.example.test',
+    source: 'Nikto',
+  }
+
+  const overview = {
+    assessment_id: assessment.id,
+    lifecycle_status: 'Finding Review',
+    total: 1,
+    counts: { Critical: 0, High: 0, Medium: 1, Low: 0 },
+    findings: [finding],
+  }
+
+  const detail = {
+    ...finding,
+    source_test: 'HTTP Server Assessment',
+    description: 'The security header is missing.',
+    impact: 'Reduced protection against content injection.',
+    security_control: 'Content-Security-Policy',
+    observed_condition: 'Header absent from HTTP response.',
+    detected_issue: 'Content-Security-Policy header missing',
+    remediation: 'Configure and verify the security header.',
+  }
+
+  function mockFindings() {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === api + '/' + assessment.id + '/findings/' + finding.id)
+        return response(detail)
+      if (url === api + '/' + assessment.id + '/findings')
+        return response(overview)
+      if (url === api + '/' + assessment.id)
+        return response({ ...assessment, status: 'Finding Review' })
+      throw new Error('Unexpected request: ' + url)
+    }))
+  }
+
+  it('selects Findings and preserves assessment identity when opening details', async () => {
+    mockFindings()
+    const { navigate } = renderPage(draftPath + '/findings')
+
+    expect(await screen.findByText(finding.title)).toBeVisible()
+
+    const sidebar = screen.getByRole('navigation', {
+      name: 'Analyst workspace',
+    })
+    expect(within(sidebar).getByRole('link', { name: 'Findings' }))
+      .toHaveAttribute('aria-current', 'page')
+
+    const breadcrumb = screen.getByRole('navigation', {
+      name: 'Breadcrumb',
+    })
+    expect(breadcrumb.textContent?.trim()).toBe('Findings')
+
+    fireEvent.click(screen.getByRole('button', { name: 'View Details' }))
+    expect(navigate).toHaveBeenCalledWith(
+      draftPath + '/findings/' + finding.id,
+    )
+  })
+
+  it('renders standalone Finding Details and returns to the same assessment', async () => {
+    mockFindings()
+    const { navigate } = renderPage(
+      draftPath + '/findings/' + finding.id,
+    )
+
+    expect(await screen.findByRole('heading', {
+      name: finding.title,
+    })).toBeVisible()
+
+    expect(screen.queryByRole('navigation', {
+      name: 'Analyst workspace',
+    })).not.toBeInTheDocument()
+
+    expect(screen.queryByRole('navigation', {
+      name: 'Breadcrumb',
+    })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {
+      name: /Back to Findings/,
+    }))
+    expect(navigate).toHaveBeenCalledWith(draftPath + '/findings')
+  })
+})

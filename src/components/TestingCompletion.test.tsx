@@ -66,7 +66,7 @@ it('renders the completion snapshot in all metrics and exactly four review rows'
   expect(screen.getByRole('region', { name: 'Completed' })).toHaveTextContent('Completed1')
   expect(screen.getByRole('region', { name: 'Failed' })).toHaveTextContent('Failed0')
   expect(document.querySelectorAll('.testing-completion-check')).toHaveLength(4)
-  expect(screen.getByText(/A verified count is not available/)).toBeVisible()
+  expect(screen.getByText(/A verified candidate findings count is not available yet/)).toBeVisible()
 })
 
 it.each([false, true])('applies creator capability without changing factual readiness: creator=%s', async creator => {
@@ -299,4 +299,77 @@ it('hides protected receipt data when access is lost instead of reusing it after
   fireEvent.click(screen.getByRole('button', { name: 'Toggle completion' }))
   fireEvent.click(screen.getByRole('button', { name: 'Toggle completion' }))
   expect(screen.queryByRole('heading', { name: 'Testing Completed' })).not.toBeInTheDocument()
+})
+
+
+it.each([0, 1, 4])(
+  'displays the verified candidate findings count: %s',
+  async count => {
+    const value = completionReview()
+    value.summary.candidate_findings = count
+    setup(value)
+
+    await screen.findByRole('heading', {
+      name: 'Ready to complete',
+    })
+
+    const message = count === 0
+      ? 'No candidate findings were identified.'
+      : `${count} candidate finding${count === 1 ? '' : 's'} identified for review in the Findings stage.`
+
+    expect(screen.getByText(message)).toBeVisible()
+  }
+)
+
+
+it('enables navigation after a verified completion receipt', async () => {
+  const navigate = vi.fn()
+  vi.stubGlobal('fetch', vi.fn(async () =>
+    reply(completedCompletionReview())))
+
+  render(<TestingCompletion
+    assessmentId={assessmentId}
+    csrfToken="synthetic-csrf"
+    operation={{ phase: 'idle' }}
+    onOperationChange={vi.fn()}
+    onExpired={expired}
+    onDecisionsChanged={decisionsChanged}
+    onContinue={vi.fn()}
+    onRecommendations={vi.fn()}
+    onContinueToFindings={navigate}
+  />)
+
+  expect(await screen.findByRole('heading', {
+    name: 'Testing Completed',
+  })).toBeVisible()
+
+  const button = screen.getByRole('button', {
+    name: 'Continue to Findings',
+  })
+  expect(button).toBeEnabled()
+  fireEvent.click(button)
+  expect(navigate).toHaveBeenCalledTimes(1)
+})
+
+it('does not expose Findings navigation before completion', async () => {
+  const navigate = vi.fn()
+  vi.stubGlobal('fetch', vi.fn(async () => reply(completionReview())))
+
+  render(<TestingCompletion
+    assessmentId={assessmentId}
+    csrfToken="synthetic-csrf"
+    operation={{ phase: 'idle' }}
+    onOperationChange={vi.fn()}
+    onExpired={expired}
+    onDecisionsChanged={decisionsChanged}
+    onContinue={vi.fn()}
+    onRecommendations={vi.fn()}
+    onContinueToFindings={navigate}
+  />)
+
+  await screen.findByRole('heading', { name: 'Ready to complete' })
+  expect(screen.queryByRole('button', {
+    name: 'Continue to Findings',
+  })).not.toBeInTheDocument()
+  expect(navigate).not.toHaveBeenCalled()
 })

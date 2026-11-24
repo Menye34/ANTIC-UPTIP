@@ -16,7 +16,7 @@ from app.models import Assessment, TestingCompletionEvent as CompletionEvent, Te
 from test_assessments import add_analyst, sign_in
 from test_scheduling_start import scheduling_concurrency  # noqa: F401
 
-pytestmark = pytest.mark.parametrize('scheduling_concurrency', ['empty'], indirect=True)
+pytestmark = pytest.mark.parametrize('scheduling_concurrency', ['migration_0021_empty'], indirect=True)
 
 
 @pytest.fixture
@@ -25,8 +25,10 @@ def history_db(scheduling_concurrency):
     root = Path(__file__).resolve().parents[1]
     config = Config(str(root / 'alembic.ini'))
     config.set_main_option('script_location', str(root / 'migrations'))
-    command.downgrade(config, '0022')
-    command.upgrade(config, '0021')
+    with factory() as db:
+        assert db.scalar(
+            text('SELECT version_num FROM alembic_version')
+        ) == '0021'
     return app, factory, config
 
 
@@ -108,7 +110,14 @@ def test_decisions_remain_mutable_during_testing_and_identity_cannot_move(histor
     app, factory, config = history_db
     identifier, _ = seed(app, factory, decision=True)
     command.upgrade(config, '0022')
-    runtime_url = make_url(get_settings().database_url).set(database=factory.kw['bind'].url.database)
+    owner_url = factory.kw['bind'].url
+    assert owner_url.database.startswith('uptip_test_schedule_')
+
+    runtime_url = make_url(get_settings().database_url).set(
+        host=owner_url.host,
+        port=owner_url.port,
+        database=owner_url.database,
+    )
     runtime = create_engine(runtime_url, hide_parameters=True)
     try:
         with runtime.begin() as connection:

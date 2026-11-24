@@ -12,6 +12,7 @@ type Props = {
   operation: CompletionOperation
   onOperationChange: (next: CompletionOperation) => void
   onContinue: () => void
+  onContinueToFindings?: () => void
   onRecommendations: () => void
   onExpired: () => void
   onDecisionsChanged: () => void
@@ -21,7 +22,7 @@ export default function TestingCompletion(props: Props) {
   return <CompletionContent key={props.assessmentId} {...props} />
 }
 
-function CompletionContent({ assessmentId, csrfToken, operation, onOperationChange, onContinue, onRecommendations, onExpired, onDecisionsChanged }: Props) {
+function CompletionContent({ assessmentId, csrfToken, operation, onOperationChange, onContinue, onContinueToFindings, onRecommendations, onExpired, onDecisionsChanged }: Props) {
   const [review, setReview] = useState<CompletionData | undefined>(() => operation.phase === 'confirmed' ? operation.review : undefined)
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
@@ -245,7 +246,13 @@ function CompletionContent({ assessmentId, csrfToken, operation, onOperationChan
           {!completed && <button type="button" className="analyst-link" onClick={onRecommendations}>Review Recommendations</button>}
         </div>
         <div className="testing-completion-check">
-          <div><h3>Candidate findings</h3><p>Candidate findings will be reviewed in the Findings stage. A verified count is not available yet.</p></div>
+          <div><h3>Candidate findings</h3>
+            <p>{s!.candidate_findings === null
+              ? 'A verified candidate findings count is not available yet.'
+              : s!.candidate_findings === 0
+                ? 'No candidate findings were identified.'
+                : `${s!.candidate_findings} candidate finding${s!.candidate_findings === 1 ? '' : 's'} identified for review in the Findings stage.`}</p>
+          </div>
           <span className="testing-completion-status" data-state="next">Next stage</span>
         </div>
         <div className="testing-completion-check">
@@ -265,7 +272,7 @@ function CompletionContent({ assessmentId, csrfToken, operation, onOperationChan
       </section>}
       <p className="testing-completion-help">{completed ? 'The assessment is now in Finding Review.' : ready ? 'Completing testing moves this assessment to Finding Review.' : 'Complete Testing becomes available once all required checks have passed.'}</p>
       <div className="testing-completion-actions">
-        {completed ? <button type="button" disabled title="Findings route is not yet available">Continue to Findings</button>
+        {completed ? <button type="button" className="analyst-create" disabled={!onContinueToFindings || Boolean(error)} onClick={onContinueToFindings}>Continue to Findings</button>
           : <><button type="button" onClick={onContinue}>Continue Testing</button>
             <button ref={completeButton} type="button" className="analyst-create" disabled={!canBegin || Boolean(confirmation)} onClick={openConfirmation}>Complete Testing</button></>}
       </div>
@@ -276,7 +283,9 @@ function CompletionContent({ assessmentId, csrfToken, operation, onOperationChan
       <p>This ends the testing phase for {confirmation?.assessment_name}. No new tests will start, and the assessment moves to Finding Review.</p>
       <ul><li>{confirmation?.summary.counts.Completed ?? '—'} tests completed</li>
         <li>{confirmation?.summary.decision_counts.pending_completion ?? '—'} recommendations waiting for a decision</li>
-        <li>Candidate findings will be reviewed in the next stage</li></ul>
+        <li>{confirmation?.summary.candidate_findings == null
+          ? 'Candidate findings will be reviewed in the next stage'
+          : `${confirmation.summary.candidate_findings} candidate finding(s) identified for review`}</li></ul>
       <div className="testing-completion-actions">
         <button type="button" disabled={submitting} onClick={cancelConfirmation}>Cancel</button>
         <button type="button" className="analyst-create" disabled={submitting || !canBegin || !confirmation}

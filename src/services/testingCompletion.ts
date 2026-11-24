@@ -19,7 +19,7 @@ export interface CompletionSummary {
   reviewed_recommendations: number
   deferred_recommendations: number
   decision_counts: DecisionCounts
-  candidate_findings: null
+  candidate_findings: number | null
   blockers: BlockerCode[]
 }
 export interface CompletionReview {
@@ -58,7 +58,8 @@ function validSummary(value: unknown): value is CompletionSummary {
     || !Array.isArray(s.pending_recommendation_ids) || !s.pending_recommendation_ids.every(digest)
     || new Set(s.pending_recommendation_ids).size !== s.pending_recommendation_ids.length
     || !Array.isArray(s.blockers) || !s.blockers.every(code => blockerCodes.includes(code))
-    || new Set(s.blockers).size !== s.blockers.length || s.candidate_findings !== null) return false
+    || new Set(s.blockers).size !== s.blockers.length || (s.candidate_findings !== null
+      && !count(s.candidate_findings))) return false
   return executionStates.reduce((sum, key) => sum + (c[key] as number), 0) === s.total
     && (s.active_execution_requests as number) <= (s.total as number)
     && (s.active_execution_requests as number) >= (c.Queued as number) + (c.Running as number)

@@ -66,7 +66,7 @@ export function intelligentRecommendationData(outcome: 'Accepted' | 'Rejected' |
   return { ...legacy, recommendations: [{ ...legacy.recommendations[0], kind: 'evidence_followup' as const,
     title: 'HTTP Server Assessment', target: '192.0.2.1', service: 'https', port: 443,
     context_digest: 'a'.repeat(64), review_outcome: outcome,
-    explanation: ['HTTPS service was observed on 192.0.2.1:443.', 'Service identification did not verify server configuration.', 'Nikto is proposed for server assessment; integration is pending.'],
+    explanation: ['HTTPS service was observed on 192.0.2.1:443. Service identification did not verify server configuration. Nikto is proposed for server assessment; integration is pending.'],
     suggested_test: 'HTTP Server Assessment', suggested_tool: 'Nikto',
     tool_integration_status: 'pending_integration' as const, execution_status: 'pending_integration' as const,
     execution_unavailability_reason: 'tool_integration_pending',

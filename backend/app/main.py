@@ -28,6 +28,10 @@ def create_app():
     app.include_router(service_discovery_router)
     from .testing_completion_routes import router as completion_router
     app.include_router(completion_router)
+    from .findings_routes import router as findings_router
+    app.include_router(findings_router)
+    from .finding_ai_routes import router as finding_ai_router
+    app.include_router(finding_ai_router)
     app.add_middleware(BodyLimitMiddleware)
 
     @app.middleware('http')

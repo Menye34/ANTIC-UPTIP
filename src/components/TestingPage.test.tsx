@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { waitFor, act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import TestingPage from './TestingPage'
 import type { ExecutionStatus } from '../services/testing'
@@ -110,22 +110,46 @@ it('rejects inconsistent counters rather than displaying misleading totals', asy
 it('refreshes execution statuses without overlapping requests and cancels on unmount', async () => {
   vi.useFakeTimers()
   let resolve!: (value: ReturnType<typeof reply>) => void
-  const fetcher = vi.fn().mockResolvedValueOnce(reply(testingData(['Queued'])))
-    .mockImplementationOnce(() => new Promise(done => { resolve = done }))
+  let executionReads = 0
+  const fetcher = vi.fn(async (
+    input: RequestInfo | URL,
+    _options?: RequestInit
+  ) => {
+    const url = String(input)
+
+    if (url.endsWith('/recommendations')) {
+      return reply(recommendationData())
+    }
+
+    if (url.endsWith('/testing')) {
+      executionReads += 1
+      if (executionReads === 1) {
+        return reply(testingData(['Queued']))
+      }
+      return new Promise<ReturnType<typeof reply>>(done => {
+        resolve = done
+      })
+    }
+
+    throw new Error('Unexpected request')
+  })
   vi.stubGlobal('fetch', fetcher)
   const view = page()
   await act(async () => { await Promise.resolve(); await Promise.resolve() })
   await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(executionReads).toBe(2)
   await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
-  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(executionReads).toBe(2)
   await act(async () => resolve(reply(testingData(['Running']))))
   expect(within(screen.getByRole('table')).getByText('Running')).toBeVisible()
   view.unmount()
-  const signal = fetcher.mock.calls[1][1].signal as AbortSignal
+  const executionCalls = fetcher.mock.calls.filter(
+    ([url]) => String(url).endsWith('/testing')
+  )
+  const signal = executionCalls[1][1]?.signal as AbortSignal
   expect(signal.aborted).toBe(true)
   await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
-  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(executionReads).toBe(2)
 })
 
 it.each(['Running', 'Completed', 'Failed'] as ExecutionStatus[])(
@@ -487,13 +511,15 @@ it('ignores a late recommendation response after tab re-entry', async () => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     if (!String(input).endsWith('/recommendations')) return reply(testingData(['Completed']))
     reads += 1
-    if (reads === 1) return new Promise<ReturnType<typeof reply>>(resolve => { resolveOld = resolve })
+    if (reads === 2) return new Promise<ReturnType<typeof reply>>(resolve => { resolveOld = resolve })
     return reply(recommendationData('Reviewed'))
   }))
   page()
   await screen.findByRole('table')
+  await waitFor(() => expect(reads).toBe(1))
+
   fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
-  expect(reads).toBe(1)
+  expect(reads).toBe(2)
   fireEvent.click(screen.getByRole('tab', { name: 'Test Activity' }))
   fireEvent.click(screen.getByRole('tab', { name: /Recommendations/ }))
   expect(await screen.findByText('Reviewed')).toBeVisible()
@@ -612,7 +638,7 @@ it.each(['Accepted', 'Rejected'] as const)('records %s only after server confirm
   fireEvent.click(screen.getByRole('tab',{name:/Recommendations/}))
   fireEvent.click(await screen.findByRole('button',{name:'Review Recommendation'}))
   const dialog=screen.getByRole('dialog')
-  expect(within(dialog).getByText('Assess an evidenced HTTP server.')).toBeVisible()
+  expect(within(dialog).getByText('Examines the web server for security misconfigurations, outdated software, and potentially exposed files and resources.')).toBeVisible()
   expect(within(dialog).getByText('This test is not yet available to run.')).toBeVisible()
   expect(within(dialog).getAllByText(/192.0.2.1/).length).toBeGreaterThan(0)
   expect(fetcher.mock.calls.every(([,options])=>!options?.method)).toBe(true)
@@ -693,6 +719,7 @@ it('preserves T-01 monitoring without an additional service scheduling card or P
   const data = { ...testingData(['Completed']), can_schedule_service_discovery: true }
   const fetcher = vi.fn(async (url: string) => {
     if (url.endsWith('/testing')) return reply(data)
+    if (url.endsWith('/recommendations')) return reply(recommendationData())
     throw new Error('Unexpected request')
   })
   vi.stubGlobal('fetch', fetcher)
@@ -703,7 +730,9 @@ it('preserves T-01 monitoring without an additional service scheduling card or P
   expect(screen.queryByRole('button', { name: 'Schedule Service Discovery' })).not.toBeInTheDocument()
   expect(screen.queryByText(/No saved receipt is visible yet/)).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Run Manual Test' })).toBeDisabled()
-  expect(fetcher.mock.calls.every(([url]) => url.endsWith('/testing'))).toBe(true)
+  expect(fetcher.mock.calls.every(([url]) =>
+    url.endsWith('/testing') || url.endsWith('/recommendations')
+  )).toBe(true)
 })
 
 it('displays authoritative discovery totals, scope and authorization identity without fabricated web targets', async () => {
@@ -733,11 +762,11 @@ it('displays six normalized Nikto observations as unverified scanner results', a
   })
 
   const cases = [
-    ['013587', 'x-content-type-options', '/'],
-    ['013588', 'content-security-policy', '/'],
-    ['013589', 'permissions-policy', '/'],
-    ['013590', 'strict-transport-security', '/'],
-    ['013591', 'referrer-policy', '/'],
+    ['013587', 'x-content-type-options header missing', '/'],
+    ['013588', 'content-security-policy header missing', '/'],
+    ['013589', 'permissions-policy header missing', '/'],
+    ['013590', 'strict-transport-security header missing', '/'],
+    ['013591', 'referrer-policy header missing', '/'],
     ['013592', 'Directory indexing is enabled', '/./'],
   ] as const
 
@@ -769,16 +798,17 @@ it('displays six normalized Nikto observations as unverified scanner results', a
 
   const dialog = await screen.findByRole('dialog')
   expect(await within(dialog).findByText('Normalized Nikto Observations (6)')).toBeVisible()
-  expect(within(dialog).getByText(/unverified scanner observations, not confirmed vulnerabilities/i)).toBeVisible()
+  expect(within(dialog).getByText('Total observations')).toBeVisible()
+  expect(within(dialog).getByText('Observation categories')).toBeVisible()
 
   const groups = within(dialog).getAllByText(
-    /Missing security headers|Potential directory listing/
+    /Missing security headers|Directory listing observations/
   )
 
   expect(groups).toHaveLength(2)
 
   const headers = within(dialog).getByText('Missing security headers').closest('details')
-  const listing = within(dialog).getByText('Potential directory listing').closest('details')
+  const listing = within(dialog).getByText('Directory listing observations').closest('details')
 
   expect(headers).not.toHaveAttribute('open')
   expect(listing).not.toHaveAttribute('open')
@@ -787,13 +817,21 @@ it('displays six normalized Nikto observations as unverified scanner results', a
   expect(within(listing!).getByText('1')).toBeInTheDocument()
 
   fireEvent.click(within(headers!).getByText('Missing security headers'))
-  fireEvent.click(within(listing!).getByText('Potential directory listing'))
+  fireEvent.click(within(listing!).getByText('Directory listing observations'))
 
   for (const [testId, message, path] of cases) {
-    const observation = within(dialog).getByText(message).closest('li')
+    const observation = within(dialog).getByText(message, {
+      selector: 'p',
+    }).closest('li')
     expect(observation).not.toBeNull()
     expect(within(observation!).getByText(`Affected path: ${path}`)).toBeVisible()
-    expect(within(observation!).getByText(`Nikto test ${testId}`)).toBeVisible()
+
+    const technical = within(observation!).getByText('Technical details')
+    expect(technical.closest('details')).not.toHaveAttribute('open')
+    fireEvent.click(technical)
+
+    expect(within(observation!).getByText('Original Nikto message')).toBeVisible()
+    expect(within(observation!).getByText(`Nikto test ID: ${testId}`)).toBeVisible()
     expect(within(observation!).getByText('Evidence ID: nikto-evidence')).toBeVisible()
   }
 
@@ -803,8 +841,8 @@ it('displays six normalized Nikto observations as unverified scanner results', a
 
   fireEvent.change(search, { target: { value: '013592' } })
 
-  expect(within(dialog).getByText('Directory indexing is enabled')).toBeVisible()
-  expect(within(dialog).queryByText('x-content-type-options')).not.toBeInTheDocument()
+  expect(within(dialog).getByText('Directory indexing is enabled', { selector: 'strong' })).toBeVisible()
+  expect(within(dialog).queryByText(/x-content-type-options/i)).not.toBeInTheDocument()
 
   fireEvent.change(search, { target: { value: 'no-such-observation' } })
 
@@ -829,7 +867,9 @@ it.each(['Queued', 'Running', 'Completed', 'Failed', 'Blocked'] as ExecutionStat
     page()
     fireEvent.click(await screen.findByRole('button', { name: /View Details:/ }))
     const dialog = await screen.findByRole('dialog')
-    expect(await within(dialog).findByText('Tool: Nikto')).toBeVisible()
+    const information = within(dialog).getByRole('region', { name: 'Test information' })
+    expect(within(information).getByText('Security Tool')).toBeVisible()
+    expect(within(information).getByText('Nikto', { selector: 'dd' })).toBeVisible()
     expect(within(dialog).getByText(status, { selector: 'span' })).toBeVisible()
     expect(within(dialog).getByText(/No normalized observations are recorded for this test/)).toBeVisible()
     expect(within(dialog).queryByText(/Host reachability alone/)).not.toBeInTheDocument()

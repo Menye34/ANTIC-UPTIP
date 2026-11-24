@@ -13,7 +13,7 @@ const navigation = [
   ['Testing', document], ['Findings', document], ['Report', document], ['Audit Log', document],
 ]
 
-export default function AnalystShell({ children, displayName, initials, signingOut, onSignOut, sidebar = true, createActive = false, scopeOverview, targetsActive = false, testingPath }: {
+export default function AnalystShell({ children, displayName, initials, signingOut, onSignOut, sidebar = true, createActive = false, scopeOverview, targetsActive = false, testingPath, findingsPath }: {
   children: ReactNode
   displayName?: string
   initials?: string
@@ -24,15 +24,32 @@ export default function AnalystShell({ children, displayName, initials, signingO
   scopeOverview?: string
   targetsActive?: boolean
   testingPath?: string
+  findingsPath?: string
 }) {
+  const findingsBase = findingsPath?.replace(/\/findings$/, '')
   const [accountOpen, setAccountOpen] = useState(false)
   const accountButton = useRef<HTMLButtonElement>(null)
   return <div className={sidebar ? "analyst-shell" : "analyst-shell assessment-shell-wide"}>
     {sidebar && <aside className="analyst-sidebar">
-      <div className="analyst-logo"><img src={testingPath ? testingShield : shield} alt="" />UPTIP</div>
+      <div className="analyst-logo"><img src={(testingPath || findingsPath) ? testingShield : shield} alt="" />UPTIP</div>
       <nav aria-label="Analyst workspace">
         {navigation.map(([label, icon], index) => index === 0
-          ? <a href="/analyst/dashboard" aria-current={createActive || scopeOverview || testingPath ? undefined : "page"} key={label}><img src={icon} alt="" />{label}</a>
+          ? <a href="/analyst/dashboard" aria-current={createActive || scopeOverview || testingPath || findingsPath ? undefined : "page"} key={label}><img src={icon} alt="" />{label}</a>
+          : findingsBase && index === 1 ? <div className="analyst-assessment-nav" key={label}>
+            <details>
+              <summary><img src={icon} alt="" />Assessment</summary>
+              <a href="/analyst/assessments/new">Create Assessment</a>
+            </details>
+          </div>
+          : findingsBase && index === 2 ? <div className="analyst-assessment-nav" key={label}>
+            <details>
+              <summary><img src={icon} alt="" />Setup</summary>
+              <a href={findingsBase + '/scope'}>Authorized Scope</a>
+              <a href={findingsBase + '/targets'}>Assessment Targets</a>
+            </details>
+          </div>
+          : findingsBase && index === 3 ? <a href={findingsBase + '/testing'} key={label}><img src={icon} alt="" />Testing</a>
+          : findingsPath && index === 4 ? <a href={findingsPath} aria-current="page" key={label}><img src={icon} alt="" />Findings</a>
           : testingPath && index === 2 ? <div className="analyst-assessment-nav" key={label}>
             <details><summary><img src={icon} alt="" />Scope &amp; Targets</summary>
               <a href={testingPath.replace(/\/testing$/, '/scope')}>Authorized Scope</a>
@@ -51,7 +68,7 @@ export default function AnalystShell({ children, displayName, initials, signingO
               <a href="/analyst/assessments/new" aria-current={createActive ? 'page' : undefined}>Create Assessment</a>
             </details>
           </div> : <button type="button" key={label} disabled title="Unavailable in this release">
-            <img src={icon} alt="" />{scopeOverview && label === 'Report' ? 'Reports' : label}{index === 2 && <span aria-hidden="true">›</span>}
+            <img src={icon} alt="" />{(scopeOverview || findingsPath) && label === 'Report' ? 'Reports' : label}{index === 2 && <span aria-hidden="true">›</span>}
           </button>)}
       </nav>
     </aside>}

@@ -15,6 +15,7 @@ from .models import (Assessment, BaselineExecutionRequest, ExecutionAttempt,
                      TestingRecommendationDecision, TestingCompletionEvent, ScannerEvidence, RecommendationReviewEvent)
 from .recommendation_planner import plan_recommendations, carry_deferred_legacy
 from .security import can_activate
+from .findings_service import candidate_keys
 
 VERSION = 2
 STATES = ('Queued', 'Running', 'Completed', 'Failed', 'Stopped', 'Blocked', 'Cancelled')
@@ -35,6 +36,7 @@ class CompletionState:
     decisions: list
     receipt: dict | None
     review_events: list = field(default_factory=list)
+    candidate_identities: tuple[str, ...] | None = None
 
 
 def aggregate(model, fields):
@@ -116,7 +118,8 @@ def load_state(db, assessment_id, user):
         raise HTTPException(404)
     return CompletionState(str(row['id']), row['name'], row['status'], str(row['creator_id']),
                            row['scope_revision'], (row['executions'] or []) + (row['recommended'] or []), row['attempts'] or [],
-                           (row['processing'] or []) + (row['recommended_processing'] or []), row['observations'] or [], row['decisions'] or [], row['receipt'], row['review_events'] or [])
+                           (row['processing'] or []) + (row['recommended_processing'] or []), row['observations'] or [], row['decisions'] or [], row['receipt'], row['review_events'] or [],
+                           tuple(sorted(candidate_keys(db, row['id']))))
 
 
 def lock_inputs(db, assessment_id):
@@ -258,7 +261,11 @@ def calculate_summary(state):
                'processing_errors': errors, 'processing_pending': pending_processing, 'missing_processing': missing,
                'recommendation_count': len(recommendations), 'pending_recommendation_ids': pending,
                'reviewed_recommendations': decisions['reviewed'], 'deferred_recommendations': decisions['deferred'],
-               'decision_counts': decisions, 'candidate_findings': None, 'blockers': blockers}
+               'decision_counts': decisions, 'candidate_findings': (
+                   len(state.candidate_identities)
+                   if state.candidate_identities is not None
+                   else None
+               ), 'blockers': blockers}
     return summary, recommendations, details
 
 
@@ -298,6 +305,8 @@ def snapshot_inputs(state):
     if state.review_events:
         groups['review_events'] = sorted([{**event, 'decided_at': utc(event['decided_at'])}
             for event in state.review_events], key=lambda event: event['id'])
+    if state.candidate_identities is not None:
+        groups['candidate_identities'] = list(state.candidate_identities)
     return {'schema_version': VERSION, 'assessment_id': state.assessment_id,
             'lifecycle_status': state.lifecycle, 'creator_id': state.creator_id,
             'scope_revision': state.scope_revision, **groups}

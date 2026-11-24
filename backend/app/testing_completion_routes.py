@@ -129,6 +129,25 @@ def complete(assessment_id: UUID, body: CompleteBody, request: Request,
         assessment_id=assessment_id, actor_id=user.id, completed_at=datetime.now(timezone.utc),
         snapshot=receipt_snapshot(review, state),
     )
+    from .findings_service import consolidate_findings
+    from .findings_models import ConsolidatedFinding
+
+    consolidate_findings(db, assessment_id)
+    db.flush()
+
+    from sqlalchemy import select
+    persisted_keys = set(db.scalars(
+        select(ConsolidatedFinding.identity_key).where(
+            ConsolidatedFinding.assessment_id == assessment_id
+        )
+    ).all())
+
+    if persisted_keys != set(state.candidate_identities or ()):
+        raise HTTPException(
+            503,
+            detail='Findings consolidation could not be verified.'
+        )
+
     db.add(event)
     assessment.status = 'Finding Review'
     db.flush()

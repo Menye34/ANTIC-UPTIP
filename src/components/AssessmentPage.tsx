@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import AssessmentTargets from './AssessmentTargets'
 import TestingPage from './TestingPage'
+import FindingsPage from './FindingsPage'
 import AuthorizedScope from './AuthorizedScope'
 import AnalystShell from './AnalystShell'
 import { AssessmentRequestError, createAssessment, getAssessment } from '../services/assessments'
@@ -219,12 +220,36 @@ export default function AssessmentPage(props: AssessmentPageProps) {
   const create = props.path.endsWith('/new')
   const targets = props.path.endsWith('/targets')
   const testing = props.path.endsWith('/testing')
+  const findingsMatch = props.path.match(
+    /^\/analyst\/assessments\/([^/]+)\/findings(?:\/([^/]+))?$/
+  )
+  const findings = Boolean(findingsMatch)
+  const assessmentId = findingsMatch?.[1]
+  const findingId = findingsMatch?.[2]
+  const assessmentBase = '/analyst/assessments/' + assessmentId
   const scopeOverview = /\/(scope|targets)$/.test(props.path) ? props.path.replace(/\/(scope|targets)$/, '') : undefined
-  return <AnalystShell testingPath={testing ? props.path : undefined} targetsActive={targets} scopeOverview={scopeOverview} sidebar={testing || create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
+  return <AnalystShell testingPath={testing ? props.path : undefined}
+    findingsPath={findings && !findingId ? props.path : undefined} targetsActive={targets} scopeOverview={scopeOverview} sidebar={findings ? !findingId : testing || create || Boolean(scopeOverview)} createActive={create} displayName={props.username}
     initials={props.username.slice(0, 2).toUpperCase()} signingOut={props.signingOut} onSignOut={props.onSignOut}>
     <main className={testing ? 'analyst-content testing-content' : create ? 'analyst-content' : 'analyst-content assessment-overview'}>
       {props.logoutFailed && <p role="alert">Unable to sign out. Please try again.</p>}
-      {testing ? <TestingPage key={props.path} assessmentId={props.path.split('/').at(-2)!} csrfToken={props.csrfToken} onExpired={props.onExpired} />
+      {findings && assessmentId ? <FindingsPage
+        key={props.path}
+        assessmentId={assessmentId}
+        findingId={findingId}
+        csrfToken={props.csrfToken}
+        onExpired={props.onExpired}
+        onTesting={() => props.navigate(assessmentBase + '/testing')}
+        onFinding={id => props.navigate(assessmentBase + '/findings/' + encodeURIComponent(id))}
+        onBack={() => props.navigate(assessmentBase + '/findings')}
+      />
+        : testing ? <TestingPage
+          key={props.path}
+          assessmentId={props.path.split('/').at(-2)!}
+          csrfToken={props.csrfToken}
+          onExpired={props.onExpired}
+          onContinueToFindings={() => props.navigate(props.path.replace(/\/testing$/, '/findings'))}
+        />
         : create ? <CreateForm {...props} /> : scopeOverview && targets ? <AssessmentTargets overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} navigate={props.navigate} />
         : scopeOverview ? <AuthorizedScope overview={scopeOverview} csrfToken={props.csrfToken} onExpired={props.onExpired} /> : <Overview {...props} />}
     </main>

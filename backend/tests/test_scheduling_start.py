@@ -356,7 +356,10 @@ def scheduling_concurrency(engine,monkeypatch,request):
         )
         config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
         config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'migrations'))
-        command.upgrade(config, '0019' if getattr(request, 'param', None) == 'migration_0019_empty' else ('0017' if getattr(request, 'param', None) == 'migration_0017' else ('head' if ci_admin_url or direct_admin or helper.is_file() else '0017')))
+        if getattr(request, 'param', None) == 'migration_0021_empty':
+            command.upgrade(config, '0021')
+        else:
+            command.upgrade(config, '0019' if getattr(request, 'param', None) == 'migration_0019_empty' else ('0017' if getattr(request, 'param', None) == 'migration_0017' else ('head' if ci_admin_url or direct_admin or helper.is_file() else '0017')))
         # Use the migration owner only for this disposable test database.
         # The production runtime role remains restricted.
         owner_engine = create_engine(migration_url)
@@ -368,7 +371,7 @@ def scheduling_concurrency(engine,monkeypatch,request):
         app.dependency_overrides[get_db]=independent_db
         with factory() as db, TestClient(app,base_url='https://testserver') as c:
             c.headers['Origin']='https://testserver'
-            if getattr(request,'param',None) in ('empty', 'migration_0019_empty'):
+            if getattr(request,'param',None) in ('empty', 'migration_0019_empty', 'migration_0021_empty'):
                 yield app,factory,None,None,{}
             else:
                 result=prepared.__wrapped__(c,db,monkeypatch)
