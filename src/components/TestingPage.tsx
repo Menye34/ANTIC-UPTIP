@@ -6,7 +6,7 @@ import type { CompletionOperation } from './TestingCompletion'
 import clock from '../assets/testing/Clock.svg'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AssessmentStartError } from '../services/assessmentStart'
-import { getTesting, getRecommendations, getRecommendationCheck } from '../services/testing'
+import { getTesting, getRecommendations } from '../services/testing'
 import type { TestingData, Recommendation, RecommendationData } from '../services/testing'
 import plus from '../assets/testing/Plus.svg'
 import information from '../assets/testing/Information.svg'
@@ -47,63 +47,9 @@ function SuggestionFields({ recommendation }: { recommendation: Recommendation }
   </dl>
 }
 
-function AlternativeReview({ assessmentId, recommendation, onExpired }: {
-  assessmentId: string; recommendation: Recommendation; onExpired: () => void
-}) {
-  const [state, setState] = useState<'checking' | 'unavailable' | 'error'>('checking')
-  const [reason, setReason] = useState('')
-  const [retry, setRetry] = useState(0)
-  useEffect(() => {
-    const controller = new AbortController()
-    void Promise.all([
-      getRecommendationCheck(assessmentId, recommendation.id, 'eligibility', controller.signal),
-      getRecommendationCheck(assessmentId, recommendation.id, 'authorization-review', controller.signal),
-    ]).then(([, review]) => {
-      if (controller.signal.aborted) return
-      setReason(review.reason_code)
-      setState('unavailable')
-    }).catch((failure: unknown) => {
-      if (controller.signal.aborted) return
-      setState('error')
-      if (failure instanceof AssessmentStartError && failure.status === 401) onExpired()
-    })
-    return () => controller.abort()
-  }, [assessmentId, recommendation.id, onExpired, retry])
-  const explanation = reason === 'tool_integration_pending' ? 'The proposed tool integration is pending; no executable alternative is available.'
-    : reason === 'followup_profile_not_supported'
-    ? 'No supported follow-up test profile is available for this recommendation.'
-    : reason === 'assessment_not_testing' ? 'This assessment is no longer in Testing.'
-    : ['target_scope_stale', 'target_out_of_scope', 'observation_target_mismatch', 'target_unavailable'].includes(reason)
-      ? 'The target or its authorized scope could not be verified for an alternative test.'
-      : 'No authorized alternative is currently available.'
-  return <>
-    <section className="testing-alternative-current" aria-label="Current Recommendation"><h3>Current Recommendation</h3>
-      <div className="testing-inset"><p className="testing-field-label">Test</p><h4>{recommendation.title}</h4>
-        <p className="testing-field-label">Tool</p><p>{recommendation.suggested_tool ?? 'Not available'}</p><SuggestionFields recommendation={recommendation} /></div>
-    </section>
-    <section aria-label="Select Alternative"><h3>Select Alternative</h3>
-      <p>Choose an integrated security tool and one of its configured test profiles.</p>
-      <label className="testing-alternative-field" htmlFor="alternative-tool">Security Tool</label>
-      <select id="alternative-tool" disabled value=""><option value="">No verified tools available for this recommendation</option></select>
-      <label className="testing-alternative-field" htmlFor="alternative-profile">Test Profile</label>
-      <select id="alternative-profile" disabled value=""><option value="">No eligible test profiles available</option></select>
-    </section>
-    <section aria-label="Selected Test"><h3>Selected Test</h3><div className="testing-inset"><h4>No alternative selected</h4>
-      <p>Select a security tool and test profile to review the alternative.</p><p>Target: {recommendation.target}</p></div></section>
-    <section aria-label="Compatibility Status"><h3>Compatibility Status</h3>
-      <div className="testing-review-safety" role="status"><h4>{state === 'checking' ? 'Checking' : 'Unavailable'}</h4>
-        <p>{state === 'checking' ? 'Checking available profiles and current authorization constraints.'
-          : state === 'error' ? 'Unable to verify alternatives. No test can be confirmed.' : explanation}</p>
-        {state === 'error' && <button type="button" className="analyst-link" onClick={() => { setState('checking'); setRetry(n => n + 1) }}>Retry alternatives</button>}
-      </div>
-    </section>
-  </>
-}
-
 function RecommendationReview({ assessmentId, recommendation, onClose, onExpired, csrfToken, onChanged }: {
   assessmentId: string; recommendation: Recommendation; onClose: () => void; onExpired: () => void; csrfToken: string; onChanged: () => void
 }) {
-  const [choosingAlternative, setChoosingAlternative] = useState(false)
   const [saving, setSaving] = useState(false)
   const [decisionError, setDecisionError] = useState('')
   const [uncertain, setUncertain] = useState(false)
@@ -141,10 +87,9 @@ function RecommendationReview({ assessmentId, recommendation, onClose, onExpired
   }, [])
   return <dialog ref={dialog} className="testing-review-dialog" aria-labelledby="recommendation-review-title"
     onCancel={event => { event.preventDefault(); if (!saving) onClose() }}>
-    <header className="testing-review-header"><h2 id="recommendation-review-title">{choosingAlternative ? 'Choose Alternative' : 'Review Recommendation'}</h2>
+    <header className="testing-review-header"><h2 id="recommendation-review-title">Review Recommendation</h2>
       <button ref={closeButton} type="button" aria-label="Close recommendation review" disabled={saving} onClick={onClose}>×</button></header>
     <div className="testing-review-body">
-      {choosingAlternative ? <AlternativeReview assessmentId={assessmentId} recommendation={recommendation} onExpired={onExpired} /> : <>
         <section aria-label="Selected Suggestion"><h3>{recommendation.title}</h3><span className="testing-recommendation-status">{recommendation.decision === null && <img src={clock} alt="" />}{recommendation.decision === 'Reviewed' ? recommendation.review_outcome ?? 'Reviewed' : recommendation.decision ?? 'Pending Review'}</span></section>
         <section aria-label="Recommendation Information"><h3>Recommendation Information</h3><SuggestionFields recommendation={recommendation} /></section>
         <section><h3>Why is this recommended?</h3>{(recommendation.explanation ?? [recommendation.reason]).map((text, index) => <p key={index}>{text}</p>)}</section>
@@ -156,20 +101,25 @@ function RecommendationReview({ assessmentId, recommendation, onClose, onExpired
         </dl></section>
         <section aria-label="Proposed Test"><h3>Proposed Test</h3>{recommendation.proposed_test ? <>
           <dl className="testing-review-fields testing-proposed-fields"><div><dt>Test</dt><dd>{recommendation.proposed_test.name}</dd></div><div><dt>Proposed Tool</dt><dd>{recommendation.proposed_test.tool}</dd></div></dl><h4>Test Description</h4>
-          <p>{recommendation.proposed_test.description}</p><p role="status">Integration pending — execution unavailable. Acceptance records review only.</p>
+          <p>{recommendation.proposed_test.id === 'http-server-assessment'
+            ? 'Examines the web server for security misconfigurations, outdated software, and potentially exposed files and resources.'
+            : recommendation.proposed_test.description}</p>
+          {recommendation.tool_integration_status !== 'integrated' &&
+            <p role="status">This test is not yet available to run.</p>}
         </> : <p>No executable follow-up test is currently supported for this observation.</p>}</section>
-      </>}
     </div>
     {decisionError && <p role="alert">{decisionError}</p>}
-    <footer className="testing-review-footer">{choosingAlternative ? <>
-      <button type="button" onClick={() => setChoosingAlternative(false)}>Cancel</button>
-      <button type="button" disabled>Confirm Alternative</button>
-    </> : <>
+    <footer className="testing-review-footer">
       {recommendation.kind === 'evidence_followup' ? <>
-        <button type="button" className="testing-review-accept" disabled={!csrfToken || saving || uncertain} onClick={() => void decide('Accepted')}>{saving ? 'Saving…' : 'Accept'}</button>
-        <button type="button" disabled={!csrfToken || saving || uncertain} onClick={() => void decide('Rejected')}>Reject</button>
+        <button type="button" className={recommendation.review_outcome === 'Accepted' ? 'testing-review-accept' : undefined}
+          aria-pressed={recommendation.review_outcome === 'Accepted'}
+          disabled={!csrfToken || saving || uncertain} onClick={() => void decide('Accepted')}>Accept</button>
+        <button type="button"
+          className={recommendation.review_outcome === 'Rejected' ? 'testing-review-accept' : undefined}
+          aria-pressed={recommendation.review_outcome === 'Rejected'}
+          disabled={!csrfToken || saving || uncertain}
+          onClick={() => void decide('Rejected')}>Reject</button>
       </> : <button type="button" disabled>Start Test</button>}
-      <button type="button" disabled={saving} onClick={() => setChoosingAlternative(true)}>Choose Alternative</button></>}
     </footer>
   </dialog>
 }
@@ -246,7 +196,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
   }, [])
 
   useEffect(() => {
-    if (!hasTestingData || error || (activeTab !== 'recommendations' && recommendationRetry === 0)) return
+    if (!hasTestingData || error) return
     const generation = ++recommendationGeneration.current
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -266,7 +216,7 @@ function TestingAssessment({ assessmentId, onExpired, csrfToken = '' }: TestingP
           if (failure.status === 401) onExpired()
         } else setRecommendationError('Unable to load recommendations. Retry to retrieve the latest suggestions.')
       } finally {
-        if (!controller.signal.aborted && generation === recommendationGeneration.current && !stopped && activeTab === 'recommendations') timer = setTimeout(() => { void load() }, 5000)
+        if (!controller.signal.aborted && generation === recommendationGeneration.current && !stopped) timer = setTimeout(() => { void load() }, 5000)
       }
     }
     void load()

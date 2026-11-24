@@ -40,6 +40,12 @@ export interface TestingData {
   recent_activity: Array<{ event: string; execution_id: string; occurred_at: string }>
 }
 export interface ExecutionDetails extends Execution {
+  authorized_activity?: {
+    target: string
+    port: number
+    scheme: 'http' | 'https'
+    endpoint_preview: string
+  }
   dispatch_status: string
   recommended_result?: { termination_verified: boolean; partial: boolean; integrity_verified: boolean; failure_reason: string | null }
   dispatch_history?: { id: string; event: string; reason_code: string; occurred_at: string; attempt_id: string | null } | null
@@ -47,6 +53,14 @@ export interface ExecutionDetails extends Execution {
   evidence: Array<{ id: string; format: string; size_bytes: number; partial: boolean; collected_at: string; sha256: string }>
   processing: Array<{ id: string; status: string; processor: string; version: string; error_code: string | null; observation_count: number; partial: boolean }>
   observations: Array<{ id: string; type: string; data: Record<string, unknown>; partial: boolean; evidence_id: string }>
+  related_service_observations?: Array<{
+    id: string
+    execution_id: string
+    type: string
+    data: Record<string, unknown>
+    partial: boolean
+    evidence_id: string
+  }>
   events: Array<{ id: string; event: string; reason_code: string; occurred_at: string; attempt_id: string | null }>
 }
 
@@ -173,7 +187,7 @@ function validProposal(row: Recommendation): boolean {
     && row.tool_integration_status === 'integrated' && row.execution_unavailability_reason === 'explicit_start_required'
   return (pending || integrated)
     && typeof row.context_digest === 'string' && row.context_digest === row.id
-    && Array.isArray(row.explanation) && row.explanation.length === 3
+    && Array.isArray(row.explanation) && row.explanation.length === 1
     && row.explanation.every(text => typeof text === 'string' && text.length > 0)
     && [null, 'Accepted', 'Rejected'].includes(row.review_outcome ?? null)
     && typeof row.service === 'string' && Number.isInteger(row.port) && row.port! > 0 && row.port! <= 65535

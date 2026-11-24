@@ -39,7 +39,20 @@ def test_distinct_server_and_application_objectives_not_fixed_http_mapping():
     values=plan_recommendations([server,app])
     assert {v['suggested_tool'] for v in values}=={'Nikto','OWASP ZAP'}
     for item in values:
-        assert len(item['explanation'])==3 and item['proposed_test']['profile_id'] is None
+        assert len(item['explanation']) == 1
+        assert item['reason'] == item['explanation'][0]
+        assert item['proposed_test']['profile_id'] is None
+        if item['suggested_tool'] == 'Nikto':
+            assert item['reason'] == (
+                'HTTPS service detected on 192.0.2.1:443. '
+                'Nikto is recommended to check for server '
+                'misconfigurations and exposed resources.'
+            )
+        else:
+            assert item['reason'] == (
+                'Web application identified at https://192.0.2.1/app. '
+                'OWASP ZAP is recommended to assess application security weaknesses.'
+            )
         assert item['source_observation_id'] in (server.id,app.id)
         assert item['execution_status']=='pending_integration' and not item['execution_available']
         assert not evaluate_recommendation(item['id'],[server,app])['eligible']

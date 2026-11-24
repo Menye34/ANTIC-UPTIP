@@ -84,20 +84,25 @@ def plan_recommendations(observations, *, completed_capabilities=()):
             if digest in seen or (str(source.target_id), capability.key, fingerprint(fact)) in completed_capabilities:
                 continue
             seen.add(digest)
-            discovered = (f"Evidence recorded {fact['service'].upper()} on {fact['address']}:{fact['port']}"
-                          + (f" (version {fact['version']})" if fact.get('version') else '') + '.')
-            if source.observation_type == 'web_application':
-                discovered = f"Evidence identifies a web application at {fact['url']}."
-                question = 'Application behavior and security controls have not been established by this observation; an open port alone would not justify this application assessment.'
+            if source.observation_type == 'service_discovery':
+                reason = (
+                    f"{fact['service'].upper()} service detected on "
+                    f"{fact['address']}:{fact['port']}. "
+                    f"{capability.tool} is recommended to check for server "
+                    "misconfigurations and exposed resources."
+                )
             else:
-                question = 'Service identification does not establish whether the HTTP server configuration or exposed resources present security issues; no vulnerability is asserted.'
-            proposed = f"{capability.test} with {capability.tool} would address this objective. Integration is pending; this recommendation cannot queue or execute a test."
+                reason = (
+                    f"Web application identified at {fact['url']}. "
+                    f"{capability.tool} is recommended to assess application "
+                    "security weaknesses."
+                )
             result.append({
                 'id': digest, 'kind': 'evidence_followup', 'title': capability.test,
                 'planner_version': 2, 'context_digest': digest, 'target_id': source.target_id,
                 'target': fact['address'], 'service': fact['service'], 'port': fact['port'],
-                'reason': '\n\n'.join((discovered, question, proposed)),
-                'explanation': [discovered, question, proposed],
+                'reason': reason,
+                'explanation': [reason],
                 'source_observation_id': source.id, 'source_evidence_id': source.evidence_id,
                 'execution_available': False, 'execution_status': 'pending_integration',
                 'execution_unavailability_reason': 'tool_integration_pending',

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import NiktoObservations from './NiktoObservations'
 import { AssessmentStartError } from '../services/assessmentStart'
 import { getExecutionDetails, getOriginalEvidence } from '../services/testing'
 import type { ExecutionDetails, OriginalEvidence } from '../services/testing'
@@ -119,6 +120,15 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
     return o.type === 'service_discovery' && d.state === 'open' && d.transport === 'tcp'
       && typeof d.port === 'number' && Number.isInteger(d.port) && d.port > 0 && d.port <= 65535 && typeof d.service === 'string'
   })
+  const relatedServices = (data?.related_service_observations ?? []).filter(o => {
+    const d = o.data
+    return o.type === 'service_discovery' && !o.partial
+      && d.state === 'open' && d.transport === 'tcp'
+      && typeof d.port === 'number' && Number.isInteger(d.port)
+      && d.port > 0 && d.port <= 65535
+      && typeof d.service === 'string'
+  })
+
   const niktoObservations = (data?.observations ?? []).filter(
     o => o.type === 'http_server_test'
       && typeof o.data.message === 'string'
@@ -131,49 +141,91 @@ function Drawer({ assessmentId, executionId, onClose, onExpired }: Props) {
     <div className="testing-review-body">
       {error && <div role="alert"><p>{error}</p>{!accessDenied && <button type="button" onClick={() => setRetry(n => n + 1)}>Retry</button>}</div>}
       {!data && !error ? <p role="status">Loading execution details…</p> : data && <>
-        <section className="testing-detail-summary"><h3>{data.test_name}</h3><span className="testing-state" data-status={data.status}>{data.status}</span>
-          <p>Tool: {data.tool}</p><p>Target: {data.target}</p></section>
-        <p className="testing-detail-status" role="status">{!['Queued', 'Running'].includes(data.status) && detailsNeedRefresh(data) ? 'Execution details are incomplete or uncertain; completion cannot be verified from this snapshot.' : data.status === 'Completed' ? (data.execution_kind === 'recommended' ? (niktoObservations.length > 0
-            ? 'The scanner completed. Review the normalized observations and original tool output. Observations are not confirmed vulnerabilities.'
-            : 'The scanner completed. No normalized observations are recorded. Review the original tool output when available.') : 'The test completed. Review the recorded ports, services and original evidence.')
-          : data.status === 'Queued' ? 'This test is queued and has not started.' : `Execution status: ${data.status}. Results may be incomplete.`}</p>
-        {data.dispatch_history && <section className="testing-detail-section" aria-label="Recorded dispatch outcome">
-          <h3>Recorded Dispatch Outcome</h3>
-          <p>{data.dispatch_history.event.replace(/_/g, ' ')} · {time(data.dispatch_history.occurred_at)}</p>
-          <p>{data.dispatch_history.event === 'dispatch_blocked' ? 'Blocking reason' : 'Recorded reason'}: {data.dispatch_history.reason_code}</p>
-          <p>This is recorded history, not permission for a future execution.</p>
-        </section>}
+        <section className="testing-detail-summary testing-test-information" aria-label="Test information">
+          <h3>Test Information</h3>
+          <div className="testing-test-information-header">
+            <strong>{data.test_name}</strong>
+            <span className="testing-state" data-status={data.status}>{data.status}</span>
+          </div>
+          <dl className="testing-test-information-grid">
+            <div>
+              <dt>Security Tool</dt>
+              <dd>{data.tool}</dd>
+            </div>
+            <div>
+              <dt>Target IP Address</dt>
+              <dd>{data.target}</dd>
+            </div>
+            {data.execution_kind === 'recommended' && data.authorized_activity && <>
+              <div>
+                <dt>Target Port</dt>
+                <dd>{data.authorized_activity.port}</dd>
+              </div>
+              <div>
+                <dt>Protocol</dt>
+                <dd>{data.authorized_activity.scheme.toUpperCase()}</dd>
+              </div>
+            </>}
+          </dl>
+        </section>
+        {(!['Queued', 'Running'].includes(data.status) && detailsNeedRefresh(data)) && (
+          <p className="testing-detail-status" role="status">
+            Execution details are incomplete or uncertain; completion cannot be verified from this snapshot.
+          </p>
+        )}
+        {data.status === 'Queued' && (
+          <p className="testing-detail-status" role="status">
+            This test is queued and has not started.
+          </p>
+        )}
+        {data.status === 'Running' && (
+          <p className="testing-detail-status" role="status">
+            Test execution is in progress.
+          </p>
+        )}
         {data.status === 'Failed' && <section aria-label="Failure information"><h3>Failure Information</h3><p>{data.recommended_result?.failure_reason ?? data.attempts.at(-1)?.reason_code ?? 'Not recorded'}</p></section>}
         <section className="testing-detail-section" aria-label="Test results"><h3>Test Results</h3>
-          {data.execution_kind === 'recommended' && (
-            <p>{niktoObservations.length > 0
-              ? 'Scanner observations require analyst validation before they can be treated as confirmed findings.'
-              : 'No normalized observations are recorded for this test.'}</p>
+          {data.execution_kind === 'recommended' && niktoObservations.length === 0 && (
+            <p>No normalized observations are recorded for this test.</p>
           )}
-          {niktoObservations.length > 0 && <>
-            <h4>Normalized Nikto Observations ({niktoObservations.length})</h4>
-            <p>These are unverified scanner observations, not confirmed vulnerabilities.</p>
-            <ul>
-              {niktoObservations.map(o => (
-                <li key={o.id}>
-                  <strong>{String(o.data.message)}</strong>
-                  <p>
-                    Affected path: {String(o.data.path)}
-                    {typeof o.data.test_id === 'string'
-                      ? ` · Nikto test ${o.data.test_id}`
-                      : ''}
-                    {o.partial ? ' · Partial result' : ''}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </>}
+          {niktoObservations.length > 0 && (
+            <NiktoObservations observations={niktoObservations} />
+          )}
           {services.length ? <><p>{services.length} recorded open TCP services{services.some(o => o.partial) && ' (includes partial results)'}.</p>
             <table aria-label="Discovered ports and services"><thead><tr><th>Port</th><th>Service</th><th>Version</th></tr></thead><tbody>{services.map(o =>
               <tr key={o.id}><td>{String(o.data.port)}/tcp{o.partial && ' · Partial'}</td><td>{String(o.data.service).toUpperCase()}</td><td>{typeof o.data.version === 'string' ? o.data.version : 'Not identified'}</td></tr>)}</tbody></table></>
-            : data.execution_kind !== 'recommended' && <p>No identified open services recorded. Host reachability alone does not identify services.</p>}
-          {data.observations.filter(o => o.type !== 'service_discovery' && o.type !== 'http_server_test').map(o => <p key={o.id}>{o.type === 'host_discovery'
-            ? `${String(o.data.address ?? data.target)} · ${String(o.data.status ?? 'unknown')}` : o.type}{o.partial && ' · Partial result'}</p>)}
+            : null}
+          {data.observations.filter(o => o.type !== 'service_discovery' && o.type !== 'http_server_test').map(o =>
+            o.type === 'host_discovery' ? (
+              <div className="testing-host-result" key={o.id}>
+                <span className="testing-host-address">{String(o.data.address ?? data.target)}</span>
+                <span className="testing-host-status" data-status={String(o.data.status ?? 'unknown').toLowerCase()}>
+                  {String(o.data.status ?? 'unknown').toLowerCase() === 'up' ? 'Up' : String(o.data.status ?? 'Unknown')}
+                </span>
+                {o.partial && <span>Partial result</span>}
+              </div>
+            ) : <p key={o.id}>{o.type}{o.partial && ' · Partial result'}</p>
+          )}
+          {data.test_name === 'Network Discovery' && relatedServices.length > 0 && (
+            <div className="testing-related-services">
+              <h4>Discovered Services</h4>
+            <table aria-label="Related discovered ports and services">
+              <thead>
+                <tr><th>Port</th><th>State</th><th>Service</th><th>Version</th></tr>
+              </thead>
+              <tbody>
+                {relatedServices.map(o => (
+                  <tr key={o.id}>
+                    <td>{String(o.data.port)}/tcp</td>
+                    <td>Open</td>
+                    <td>{String(o.data.service).toUpperCase()}</td>
+                    <td>{typeof o.data.version === 'string' ? o.data.version : 'Not identified'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            </div>
+          )}
         </section>
         <OriginalOutput data={data} assessmentId={assessmentId} denied={denied} />
         <details className="testing-detail-section"><summary>Technical Details</summary>

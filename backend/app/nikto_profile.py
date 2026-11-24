@@ -47,8 +47,18 @@ def authority(version=VERSION):
 def activation():
     # Trusted system configuration selects one exact release policy.
     # Analyst consent is verified separately for each recommended execution.
-    from .config import get_settings
-    settings = get_settings()
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+
+    class NiktoPolicySettings(BaseSettings):
+        model_config = SettingsConfigDict(
+            env_file='.env',
+            env_prefix='UPTIP_',
+            extra='ignore',
+        )
+        nikto_policy_version: int | None = None
+        nikto_policy_digest: str | None = None
+
+    settings = NiktoPolicySettings()
     version = settings.nikto_policy_version
     digest = settings.nikto_policy_digest
     if version is None and digest is None:

@@ -72,9 +72,9 @@ def details(db, assessment_id, execution_id, user):
             Processing.assessment_id == assessment_id,
             Processing.target_id == row['target_id']).order_by(Processing.finished_at, Processing.id)).all()
         processing = [{'id': str(p.id), 'evidence_id': str(execution_id),
-                       'processor': p.processor, 'processor_version': p.processor_version,
+                       'processor': p.processor, 'version': p.processor_version,
                        'status': p.status, 'error_code': p.error_code,
-                       'observation_count': p.observation_count, 'is_partial': False,
+                       'observation_count': p.observation_count, 'partial': False,
                        'finished_at': p.finished_at} for p in records]
         valid = [p.id for p in records if p.status == 'Succeeded']
         if valid:
@@ -87,7 +87,7 @@ def details(db, assessment_id, execution_id, user):
                              'data': o.data, 'target_id': str(o.target_id),
                              'evidence_id': str(execution_id),
                              'processing_id': str(o.processing_id),
-                             'is_partial': o.is_partial,
+                             'partial': o.is_partial,
                              'collected_at': o.collected_at,
                              'processed_at': o.processed_at} for o in found_observations]
     return {**execution_view(row), **dispatch_history(events), 'authorized_activity': row['execution_plan'],

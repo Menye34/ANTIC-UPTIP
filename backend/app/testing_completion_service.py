@@ -69,12 +69,54 @@ def load_state(db, assessment_id, user):
     ).where(Assessment.id == assessment_id, accessible(user))
     from .recommended_test_queue import RecommendedTestJob
     query = query.add_columns(aggregate(RecommendedTestJob, ('id','target_id','profile_id','profile_version','status')).label('recommended'))
+    from .recommended_normalization_models import RecommendedProcessingOutcome
+    from .recommended_testing_reads import output_verified
+
+    processing = RecommendedProcessingOutcome
+    job = RecommendedTestJob
+
+    recommended_processing = (
+        select(func.json_agg(func.json_build_object(
+            'id', processing.id,
+            'request_id', processing.job_id,
+            'target_id', processing.target_id,
+            'output_digest', processing.output_digest,
+            'status', processing.status,
+            'processor', processing.processor,
+            'processor_version', processing.processor_version,
+            'is_partial', False,
+            'finished_at', processing.finished_at,
+            'observation_count', processing.observation_count,
+            'error_code', processing.error_code
+        )))
+        .select_from(processing)
+        .join(job, and_(
+            job.id == processing.job_id,
+            job.assessment_id == processing.assessment_id,
+            job.target_id == processing.target_id
+        ))
+        .where(
+            processing.assessment_id == Assessment.id,
+            job.status == 'Completed',
+            job.termination_verified.is_(True),
+            job.output_partial.is_(False),
+            processing.output_digest == job.output_digest,
+            output_verified()
+        )
+        .correlate(Assessment)
+        .scalar_subquery()
+    )
+
+    query = query.add_columns(
+        recommended_processing.label('recommended_processing')
+    )
+
     row = db.execute(query).mappings().one_or_none()
     if row is None:
         raise HTTPException(404)
     return CompletionState(str(row['id']), row['name'], row['status'], str(row['creator_id']),
                            row['scope_revision'], (row['executions'] or []) + (row['recommended'] or []), row['attempts'] or [],
-                           row['processing'] or [], row['observations'] or [], row['decisions'] or [], row['receipt'], row['review_events'] or [])
+                           (row['processing'] or []) + (row['recommended_processing'] or []), row['observations'] or [], row['decisions'] or [], row['receipt'], row['review_events'] or [])
 
 
 def lock_inputs(db, assessment_id):
@@ -160,8 +202,6 @@ def recommendation_state(db, assessment_id, user):
             item['execution_status'] = 'requires_start_review'
             item['tool_integration_status'] = 'integrated'
             item['execution_unavailability_reason'] = 'explicit_start_required'
-            item['explanation'] = [*item['explanation'][:2], 'Nikto is integrated. Execution requires current Start Test readiness and explicit analyst confirmation.']
-            item['reason'] = '\n\n'.join(item['explanation'])
         item['review_outcome'] = outcomes.get(item['id'])
         source = source_by_id.get(item['source_observation_id'])
         item['source_test'] = ({key: source[key] for key in ('test_name', 'tool', 'status', 'execution_id')}

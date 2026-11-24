@@ -201,6 +201,51 @@ def execution_details(assessment_id: UUID, execution_id: UUID,
         from .recommended_testing_reads import details
         return details(db, assessment_id, execution_id, user)
     request, attempts, evidence, processing, observations, events = row
+
+    related_service_observations = []
+    if request.activity == 'Network Discovery':
+        related_rows = db.execute(
+            select(SecurityObservation, BaselineExecutionRequest)
+            .join(BaselineExecutionRequest, and_(
+                BaselineExecutionRequest.id == SecurityObservation.request_id,
+                BaselineExecutionRequest.assessment_id == SecurityObservation.assessment_id,
+                BaselineExecutionRequest.target_id == SecurityObservation.target_id))
+            .join(ResultProcessingOutcome, and_(
+                ResultProcessingOutcome.id == SecurityObservation.processing_id,
+                ResultProcessingOutcome.request_id == SecurityObservation.request_id,
+                ResultProcessingOutcome.assessment_id == SecurityObservation.assessment_id,
+                ResultProcessingOutcome.target_id == SecurityObservation.target_id))
+            .join(ScannerEvidence, and_(
+                ScannerEvidence.id == SecurityObservation.evidence_id,
+                ScannerEvidence.request_id == SecurityObservation.request_id,
+                ScannerEvidence.assessment_id == SecurityObservation.assessment_id,
+                ScannerEvidence.target_id == SecurityObservation.target_id))
+            .where(
+                SecurityObservation.assessment_id == request.assessment_id,
+                SecurityObservation.target_id == request.target_id,
+                SecurityObservation.observation_type == 'service_discovery',
+                SecurityObservation.is_partial.is_(False),
+                ScannerEvidence.is_partial.is_(False),
+                ResultProcessingOutcome.status == 'Succeeded',
+                ResultProcessingOutcome.is_partial.is_(False),
+                BaselineExecutionRequest.activity == 'Service Discovery',
+                BaselineExecutionRequest.status == 'Completed',
+            )
+            .order_by(SecurityObservation.collected_at, SecurityObservation.id)
+        ).all()
+
+        related_service_observations = [
+            {
+                'id': observation.id,
+                'execution_id': execution.id,
+                'type': observation.observation_type,
+                'data': observation.data,
+                'partial': observation.is_partial,
+                'evidence_id': observation.evidence_id,
+            }
+            for observation, execution in related_rows
+        ]
+
     from .testing_read_summary import dispatch_history
     return {**execution_view(request), 'authorized_activity': request.authorized_activity,
         **dispatch_history(events or []),
@@ -208,6 +253,7 @@ def execution_details(assessment_id: UUID, execution_id: UUID,
         'evidence': sorted(evidence or [], key=lambda e: (e['collected_at'], e['id'])),
         'processing': processing or [],
         'observations': sorted(observations or [], key=lambda o: o['id']),
+        'related_service_observations': related_service_observations,
         'events': sorted(events or [], key=lambda e: (e['occurred_at'], e['id']))}
 
 

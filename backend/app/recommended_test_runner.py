@@ -39,19 +39,30 @@ class RecommendedTestRunner:
             if job is None or job.status != 'Queued':
                 return False
             if not dispatch_readiness(job, boundary_enforced=True):
-                # A valid queued job may simply be awaiting release.
-                # Invalidate only jobs whose previously accepted policy
-                # is no longer current.
-                from .nikto_profile import validate_plan, dispatch_enabled
-                if validate_plan(job.execution_plan) and not dispatch_enabled(job.execution_plan):
-                    with self.factory.begin() as locked_db:
-                        current = locked(locked_db, job_id)
-                        if (current is not None and current.status == 'Queued'
-                                and validate_plan(current.execution_plan)
-                                and not dispatch_enabled(current.execution_plan)):
-                            current.status = 'Blocked'
-                            current.failure_reason = 'recommended_authorization_unverified'
-                            event(locked_db, current, 'dispatch_blocked', current.failure_reason)
+                from .nikto_profile import validate_plan, activation
+
+                plan = job.execution_plan
+                if not validate_plan(plan):
+                    return False
+
+                # Historical disabled v1 jobs remain queued and are never
+                # silently upgraded to the active release.
+                if plan['profile_version'] != 2:
+                    return False
+
+                # A v2 job is valid only under the exact selected release.
+                try:
+                    selected = activation()['policy']
+                    stale = (selected['version'] != 2
+                             or selected['digest'] != plan['policy_digest'])
+                except (ValueError, TypeError, KeyError):
+                    stale = True
+
+                if stale:
+                    job.status = 'Blocked'
+                    job.failure_reason = 'recommended_authorization_unverified'
+                    event(db, job, 'dispatch_blocked', job.failure_reason)
+                    db.commit()
                 return False
             plan = dict(job.execution_plan)
         claimed = False
@@ -137,6 +148,10 @@ class RecommendedTestRunner:
                 logger.exception('recommended_result_normalization_failed job_id=%s', job_id)
             return True
         except Exception as exc:
+            logger.exception(
+                'recommended_execution_failed job_id=%s claimed=%s launched=%s',
+                job_id, claimed, launched
+            )
             if claimed:
                 with self.factory.begin() as db:
                     job = locked(db, job_id)

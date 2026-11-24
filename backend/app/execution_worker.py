@@ -26,6 +26,33 @@ from .nikto_network_boundary import NamespaceBoundary
 from .nmap_adapter import AdapterUnavailable
 
 
+
+def _worker_database_url():
+    """Require a separately configured database identity for execution workers."""
+    from sqlalchemy.engine import make_url
+
+    import os
+
+    raw = os.environ.get("UPTIP_WORKER_DATABASE_URL")
+
+    if not raw:
+        raise RuntimeError(
+            "UPTIP_WORKER_DATABASE_URL must be configured for the execution worker."
+        )
+
+    url = make_url(raw)
+
+    if url.drivername != "postgresql+psycopg":
+        raise RuntimeError("Worker requires PostgreSQL with psycopg.")
+
+    if url.username != "uptip_worker":
+        raise RuntimeError(
+            "Execution worker must authenticate as uptip_worker."
+        )
+
+    return raw
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # This read-only command does not load database settings or invoke Nmap.
@@ -74,8 +101,8 @@ def main(argv=None):
             selected = activation()['policy']
             print('uptip_nikto_adapter_verified ' + json.dumps({key: selected[key]
                 for key in ('id','version','digest','execution_enabled')}, sort_keys=True), flush=True)
-        except (AdapterUnavailable, ValueError):
-            print('uptip_nikto_unavailable isolation_or_executable_unverified', flush=True)
+        except (AdapterUnavailable, ValueError) as exc:
+            print('uptip_nikto_unavailable ' + type(exc).__name__ + ': ' + str(exc), flush=True)
             nikto = None
     store = EvidenceStore(args.evidence_directory)
     adapter.verify()  # Version only; no target or scan.
@@ -87,7 +114,7 @@ def main(argv=None):
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    engine = create_engine(get_settings().database_url, pool_pre_ping=True, hide_parameters=True, poolclass=NullPool,
+    engine = create_engine(_worker_database_url(), pool_pre_ping=True, hide_parameters=True, poolclass=NullPool,
         connect_args={'connect_timeout': 3, 'options': '-c statement_timeout=3000 -c lock_timeout=2000'})
     factory = sessionmaker(engine, expire_on_commit=False)
     worker_id = f'{socket.gethostname()}:{uuid4()}'
